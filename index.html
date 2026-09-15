@@ -332,6 +332,66 @@ const ColorSwatch = ({ value, onChange, title }) => {
                 background: c, cursor: "pointer",
             } })))))));
 };
+// Feuille "Réglage" (icône ⚙) : Plans / Cartouche / Nomenclature / Impression
+// PDF-PNG — composant stable au niveau module (état d'ouverture + sous-vue
+// impression propres, sinon perdus à chaque rendu du composant principal).
+// Le bouton "Fond : Blanc/Aucun/Bleu" ne vit QUE dans la sous-vue impression,
+// jamais affiché ailleurs dans la barre du haut.
+const SettingsMenu = ({ iconBtnStyle, chip, chipOn, onOpenPlans, onOpenCart, onOpenBom, exportBg, setExportBg, exportPng }) => {
+    const [open, setOpen] = useState(false);
+    const [printView, setPrintView] = useState(false);
+    const close = () => { setOpen(false); setPrintView(false); };
+    const item = { ...chip, textAlign: "left", width: "100%", boxSizing: "border-box" };
+    const mainList = React.createElement(React.Fragment, null,
+        React.createElement("span", { style: { fontWeight: 800, letterSpacing: 1.5, fontSize: 14 } }, "R\u00C9GLAGE"),
+        React.createElement("button", { style: item, onClick: () => { close(); onOpenPlans(); } }, "Plans"),
+        React.createElement("button", { style: item, onClick: () => { close(); onOpenCart(); } }, "Cartouche"),
+        React.createElement("button", { style: item, onClick: () => { close(); onOpenBom(); } }, "Nomenclature"),
+        React.createElement("button", { style: item, onClick: () => setPrintView(true) }, "Impression PDF / PNG"));
+    const printPanel = React.createElement(React.Fragment, null,
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+            React.createElement("button", { style: chip, onClick: () => setPrintView(false) }, "\u2039"),
+            React.createElement("span", { style: { fontWeight: 800, letterSpacing: 1.5, fontSize: 14 } }, "IMPRESSION PDF / PNG")),
+        React.createElement("button", { style: item, onClick: () => setExportBg((b) => (b === "paper" ? "white" : b === "white" ? "blue" : "paper")) },
+            "Fond : ",
+            exportBg === "paper" ? "Blanc" : exportBg === "white" ? "Aucun" : "Bleu"),
+        React.createElement("div", { style: { display: "flex", gap: 8 } },
+            React.createElement("button", { style: { ...chipOn, flex: 1, textAlign: "center" }, onClick: () => { exportPng(); close(); } }, "PNG"),
+            React.createElement("button", { style: { ...chipOn, flex: 1, textAlign: "center" }, onClick: () => { exportPng("pdf"); close(); } }, "PDF")));
+    const sheet = open && React.createElement("div", { onClick: close, style: {
+            position: "fixed", inset: 0, background: "rgba(20,25,32,0.55)",
+            display: "flex", alignItems: "flex-end", zIndex: 20,
+        } },
+        React.createElement("div", { onClick: (e) => e.stopPropagation(), style: {
+                background: COLORS.sheet, width: "100%", borderRadius: "16px 16px 0 0",
+                padding: "18px 18px calc(18px + env(safe-area-inset-bottom))",
+                display: "flex", flexDirection: "column", gap: 10,
+            } }, printView ? printPanel : mainList));
+    return React.createElement(React.Fragment, null,
+        React.createElement("button", { style: { ...iconBtnStyle, fontSize: 13.5 }, onClick: () => setOpen(true), title: "R\u00E9glage" }, "\u2699\uFE0F R\u00E9glage"),
+        sheet);
+};
+// Feuille "Outils" (icône 🔧) : Calcul / Débit — même schéma que SettingsMenu,
+// sans sous-vue.
+const ToolsMenu = ({ iconBtnStyle, chip, onOpenCalc, onOpenDebit }) => {
+    const [open, setOpen] = useState(false);
+    const item = { ...chip, textAlign: "left", width: "100%", boxSizing: "border-box" };
+    const sheet = open && React.createElement("div", { onClick: () => setOpen(false), style: {
+            position: "fixed", inset: 0, background: "rgba(20,25,32,0.55)",
+            display: "flex", alignItems: "flex-end", zIndex: 20,
+        } },
+        React.createElement("div", { onClick: (e) => e.stopPropagation(), style: {
+                background: COLORS.sheet, width: "100%", borderRadius: "16px 16px 0 0",
+                padding: "18px 18px calc(18px + env(safe-area-inset-bottom))",
+                display: "flex", flexDirection: "column", gap: 10,
+            } },
+            React.createElement("span", { style: { fontWeight: 800, letterSpacing: 1.5, fontSize: 14 } }, "OUTILS"),
+            React.createElement("button", { style: item, onClick: () => { setOpen(false); onOpenCalc(); } }, "Calcul"),
+            React.createElement("button", { style: item, onClick: () => { setOpen(false); onOpenDebit(); } }, "D\u00E9bit")));
+    return React.createElement(React.Fragment, null,
+        React.createElement("button", { style: { ...iconBtnStyle, fontSize: 13.5 }, onClick: () => setOpen(true), title: "Outils" }, "\uD83D\uDD27 Outils"),
+        sheet);
+};
 // vue 3D navigable (orbite au glissement, zoom molette/pincement) — tracé
 // et accessoires uniquement, sans cotes ni génie civil ; composant stable
 // au niveau module, tri peintre simple par profondeur après rotation
@@ -8514,17 +8574,19 @@ function IsoChantier() {
             React.createElement("button", { style: iconBtn, onClick: toggleFullscreen, title: "Plein \u00E9cran" }, "\u26F6"),
             React.createElement("button", { style: iconBtn, onClick: undo, title: "Annuler" }, "\u21A9"),
             React.createElement("button", { style: iconBtn, onClick: clearAll, title: "Tout effacer" }, "\u2715"),
-            React.createElement("button", { style: { ...iconBtn, fontSize: 13.5 }, onClick: () => setShowPlans(true) }, "Plans"),
-            React.createElement("button", { style: { ...iconBtn, fontSize: 13.5 }, onClick: () => setShowCart(true) }, "Cartouche"),
-            React.createElement("button", { style: { ...iconBtn, fontSize: 13.5 }, onClick: () => setShowBom(true) }, "Nomenclature"),
-            React.createElement("button", { style: { ...iconBtn, fontSize: 13.5 }, onClick: () => setShowCalc(true) }, "Calcul"),
-            React.createElement("button", { style: { ...iconBtn, fontSize: 13.5 }, onClick: () => setShowDebit(true) }, "D\u00E9bit"),
             React.createElement("button", { style: { ...iconBtn, fontSize: 13.5, background: gridTheme === "blue" ? COLORS.topbar : undefined, color: gridTheme === "blue" ? "#fff" : undefined }, onClick: () => setGridTheme((t) => (t === "blue" ? "default" : "blue")), title: "Th\u00E8me quadrillage bleu" }, "\u25A6"),
-            React.createElement("button", { style: { ...iconBtn, fontSize: 11.5, minWidth: 78 }, onClick: () => setExportBg((b) => (b === "paper" ? "white" : b === "white" ? "blue" : "paper")), title: "Fond de l'export PNG/PDF" },
-                "Fond : ",
-                exportBg === "paper" ? "Blanc" : exportBg === "white" ? "Aucun" : "Bleu"),
-            React.createElement("button", { style: { ...iconBtn, fontSize: 13.5, background: COLORS.accent }, onClick: exportPng }, "PNG"),
-            React.createElement("button", { style: { ...iconBtn, fontSize: 13.5, background: COLORS.accent }, onClick: () => exportPng("pdf") }, "PDF")),
+            React.createElement(SettingsMenu, {
+                iconBtnStyle: iconBtn, chip: chip, chipOn: chipOn,
+                onOpenPlans: () => setShowPlans(true),
+                onOpenCart: () => setShowCart(true),
+                onOpenBom: () => setShowBom(true),
+                exportBg: exportBg, setExportBg: setExportBg, exportPng: exportPng,
+            }),
+            React.createElement(ToolsMenu, {
+                iconBtnStyle: iconBtn, chip: chip,
+                onOpenCalc: () => setShowCalc(true),
+                onOpenDebit: () => setShowDebit(true),
+            })),
         React.createElement("div", { ref: containerRef, style: { flex: 1, position: "relative", overflow: "hidden" } },
             React.createElement("svg", { ref: svgRef, width: vp.w, height: vp.h, style: { display: rvRef.current ? "none" : "block", touchAction: "none" }, onPointerDown: handleDown, onPointerMove: handleMove, onPointerUp: handleUp, onPointerCancel: handleCancel, onPointerLeave: handleCancel },
                 gridLines.map(([a, b, strong], i) => (React.createElement("line", { key: i, x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: gridTheme === "blue" ? (strong ? "#96B3D1" : "#C3D5E8") : (strong ? COLORS.gridStrong : COLORS.grid), "stroke-width": strong ? 1.2 : 0.7 }))),
