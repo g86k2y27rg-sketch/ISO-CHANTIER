@@ -118,6 +118,8 @@ const NO_BOM_TYPES = new Set([...STRUCTURE_TYPES, "texte", "suite", "forme", "pe
 const NO_SNAP_TYPES = new Set([...STRUCTURE_TYPES, "texte", "forme", "pente"]);
 // organes "en ligne" : n'ont de sens que posés SUR un tube, donc accroche
 // obligatoire aux axes iso (pas de placement libre dans le vide)
+// organes et brides orientables suivant les axes iso perpendiculaires au tube
+const WORI_TYPES = new Set(["bride", "bridesimple", "vanne", "boule", "vpapillon", "clapet"]);
 const INLINE_TYPES = new Set([
     "vanne", "boule", "vpapillon", "clapet",
     "te", "tesw", "teoduit", "reduction", "bride", "bridesimple", "support", "capsoude", "flexible",
@@ -128,25 +130,32 @@ const APPAREIL_TYPES = new Set([
     "circulateur", "echangeur",
     "bache",
 ]);
-const CATS = ["Organes", "Accessoires", "Appareils", "Soudure", "Génie civil", "Formes", "Annotations"];
+const CATS = ["Organes", "Accessoires", "Soudure", "Appareils", "Autres"];
+// fiche de chaque catégorie pour la fenêtre « Ajouter » (couleurs du thème)
+const CAT_INFO = {
+    "Organes": { icon: "\u22C8", color: "#E8600A", sub: "Vannes, clapet" },
+    "Accessoires": { icon: "\u2533", color: "#282456", sub: "Brides, t\u00E9s, r\u00E9ductions, supports\u2026" },
+    "Soudure": { icon: "\u2736", color: "#B3341C", sub: "Soudure BW, SW" },
+    "Appareils": { icon: "\u25A3", color: "#1D5FA8", sub: "Circulateur, \u00E9changeur, b\u00E2che" },
+    "Autres": { icon: "\u22EF", color: "#7A8394", sub: "G\u00E9nie civil, formes, annotations" },
+};
 const PALETTE = [
     // Organes
-    { cat: "Organes", type: "vanne", label: "V. passage direct" },
     { cat: "Organes", type: "boule", label: "V. boisseau sph." },
     { cat: "Organes", type: "vpapillon", label: "V. papillon" },
     { cat: "Organes", type: "clapet", label: "Clapet" },
-    { cat: "Organes", type: "te", label: "Té" },
-    { cat: "Organes", type: "tesw", label: "Té SW" },
-    { cat: "Organes", type: "teoduit", label: "Té Réduit" },
-    { cat: "Organes", type: "reduction", label: "Réduction" },
-    // Accessoires
-    { cat: "Accessoires", type: "bride", label: "Bride" },
-    { cat: "Accessoires", type: "bridesimple", label: "Bride simple" },
-    { cat: "Accessoires", type: "support", label: "Support" },
+    // Accessoires (ordre alphabétique)
     { cat: "Accessoires", type: "bobinef", label: "Bobine F" },
     { cat: "Accessoires", type: "bobine", label: "Bobine F/S" },
+    { cat: "Accessoires", type: "bride", label: "Bride" },
+    { cat: "Accessoires", type: "bridesimple", label: "Bride simple" },
     { cat: "Accessoires", type: "capsoude", label: "Cap soudé" },
     { cat: "Accessoires", type: "flexible", label: "Flexible" },
+    { cat: "Accessoires", type: "reduction", label: "Réduction" },
+    { cat: "Accessoires", type: "support", label: "Support" },
+    { cat: "Accessoires", type: "te", label: "Té" },
+    { cat: "Accessoires", type: "teoduit", label: "Té Réduit" },
+    { cat: "Accessoires", type: "tesw", label: "Té SW" },
     // Appareils
     { cat: "Appareils", type: "circulateur", label: "Circulateur" },
     { cat: "Appareils", type: "echangeur", label: "Échangeur" },
@@ -154,21 +163,18 @@ const PALETTE = [
     // Soudure
     { cat: "Soudure", type: "soudure", label: "Soudure BW" },
     { cat: "Soudure", type: "souduresw", label: "Soudure SW" },
-    // Génie civil
-    { cat: "Génie civil", type: "mur", label: "Mur/Voile" },
-    { cat: "Génie civil", type: "sol", label: "Sol" },
-    { cat: "Génie civil", type: "tremie", label: "Trémie" },
-    // Formes libres
-    { cat: "Formes", type: "forme", shape: "carre", label: "▢ Carré" },
-    { cat: "Formes", type: "forme", shape: "rectangle", label: "▭ Rectangle" },
-    { cat: "Formes", type: "forme", shape: "rond", label: "◯ Rond" },
-    { cat: "Formes", type: "forme", shape: "demi", label: "◠ Demi-rond" },
-    { cat: "Formes", type: "forme", shape: "fleche", label: "➤ Flèche" },
-    { cat: "Formes", type: "texte", label: "Texte" },
-    // Annotations
-    { cat: "Annotations", type: "texte", label: "Texte" },
-    { cat: "Annotations", type: "pente", label: "Pente %" },
-    { cat: "Annotations", type: "suite", label: "Suite ⋯" },
+    // Autres : génie civil, formes, annotations
+    { cat: "Autres", grp: "G\u00E9nie civil", type: "mur", label: "Mur/Voile" },
+    { cat: "Autres", grp: "G\u00E9nie civil", type: "sol", label: "Sol" },
+    { cat: "Autres", grp: "G\u00E9nie civil", type: "tremie", label: "Tr\u00E9mie" },
+    { cat: "Autres", grp: "Formes", type: "forme", shape: "carre", label: "\u25A2 Carr\u00E9" },
+    { cat: "Autres", grp: "Formes", type: "forme", shape: "rectangle", label: "\u25AD Rectangle" },
+    { cat: "Autres", grp: "Formes", type: "forme", shape: "rond", label: "\u25EF Rond" },
+    { cat: "Autres", grp: "Formes", type: "forme", shape: "demi", label: "\u25E0 Demi-rond" },
+    { cat: "Autres", grp: "Formes", type: "forme", shape: "fleche", label: "\u27A4 Fl\u00E8che" },
+    { cat: "Autres", grp: "Annotations", type: "texte", label: "Texte" },
+    { cat: "Autres", grp: "Annotations", type: "pente", label: "Pente %" },
+    { cat: "Autres", grp: "Annotations", type: "suite", label: "Suite \u22EF" },
 ];
 const DIRS = [
     [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
@@ -299,6 +305,138 @@ const NumField = ({ placeholder, value, onInput, focusKey, calcFocus, setCalcFoc
 // Outil DÉV·CHANTIER (développés de tôlerie) : page autonome embarquée,
 // affichée dans une iframe (srcdoc) pour isoler son CSS/JS de l'app ISO.
 const DEV_CHANTIER_HTML = "\u003c!DOCTYPE html>\n\u003chtml lang=\"fr\">\n\u003chead>\n\u003cmeta charset=\"utf-8\">\n\u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1\">\n\u003cmeta name=\"apple-mobile-web-app-capable\" content=\"yes\">\n\u003cmeta name=\"apple-mobile-web-app-status-bar-style\" content=\"black-translucent\">\n\u003cmeta name=\"theme-color\" content=\"#282456\">\n\u003ctitle>DÉV·CHANTIER — Développés de tôlerie\u003c/title>\n\u003cstyle>\n:root{\n  --violet:#282456;\n  --violet-2:#3a3573;\n  --bleu:#14396B;          /* bleu de traçage */\n  --bleu-clair:#2A5FA8;\n  --craie:#E8B33A;         /* crayon jaune de traçage */\n  --ink:#10141A;\n  --acier:#E6EAEF;\n  --papier:#FFFFFF;\n  --ligne:#CBD3DC;\n  --gris:#6B7683;\n  --rouge:#C8452D;\n  --vert:#1F7A5C;\n  --r:10px;\n  --mono:ui-monospace,\"SF Mono\",Menlo,Consolas,monospace;\n  --sans:-apple-system,BlinkMacSystemFont,\"Helvetica Neue\",Arial,sans-serif;\n}\n*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}\nhtml,body{margin:0;padding:0}\nbody{\n  font-family:var(--sans);\n  background:var(--acier);\n  color:var(--ink);\n  font-size:15px;\n  -webkit-text-size-adjust:100%;\n  padding-bottom:env(safe-area-inset-bottom);\n}\n\n/* ---------- barre du haut ---------- */\n.top{\n  position:sticky;top:0;z-index:30;\n  background:var(--violet);color:#fff;\n  padding:calc(env(safe-area-inset-top) + 9px) 12px 0;\n  box-shadow:0 1px 0 rgba(0,0,0,.2);\n}\n.top .brand{display:flex;align-items:center;gap:8px;padding-bottom:6px;min-height:34px}\n.top .brand b{font-size:18px;letter-spacing:.02em;font-weight:700}\n.top .brand span{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;opacity:.62}\n.tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}\n.tabs::-webkit-scrollbar{display:none}\n.tab{\n  flex:0 0 auto;appearance:none;border:0;background:transparent;\n  color:rgba(255,255,255,.66);font-family:var(--sans);font-size:14px;\n  letter-spacing:0;font-weight:600;\n  padding:10px 13px 9px;border-bottom:3px solid transparent;cursor:pointer;\n}\n.tab[aria-selected=\"true\"]{color:#fff;border-bottom-color:var(--craie)}\n\n/* ---------- cartes ---------- */\n.wrap{padding:10px 10px 26px;max-width:1100px;margin:0 auto}\n.card{background:var(--papier);border-radius:var(--r);margin-bottom:10px;overflow:hidden;\n  box-shadow:0 1px 2px rgba(16,20,26,.09),0 0 0 1px rgba(16,20,26,.05)}\n.card>h2{\n  margin:0;padding:12px 14px 10px;font-size:15px;letter-spacing:0;\n  color:var(--ink);font-weight:700;border-bottom:1px solid var(--ligne);\n  display:flex;justify-content:space-between;align-items:center;gap:8px;\n}\n.card>h2 .qty{font-family:var(--mono);letter-spacing:0;color:var(--bleu);font-size:12.5px;font-weight:600;text-transform:none}\n.gt{font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--gris);font-weight:700;margin:14px 0 7px}\n.gt:first-child{margin-top:0}\n.body{padding:12px 13px 14px}\n\n/* ---------- champs ---------- */\n.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px 10px}\n.f{display:flex;flex-direction:column;gap:4px;min-width:0}\n.f label{font-size:13px;letter-spacing:0;color:#3E4854;font-weight:600;\n  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.f .in{display:flex;align-items:center;background:#F4F6F9;border:1px solid var(--ligne);border-radius:8px;\n  padding:0 9px;transition:border-color .12s,box-shadow .12s}\n.f .in:focus-within{border-color:var(--bleu-clair);box-shadow:0 0 0 3px rgba(42,95,168,.14)}\n.f input,.f select{\n  appearance:none;-webkit-appearance:none;border:0;background:transparent;outline:0;\n  font-family:var(--mono);font-size:16px;color:var(--ink);width:100%;padding:9px 0;min-width:0;\n}\n.f input::-webkit-outer-spin-button,.f input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}\n.f input[type=number]{-moz-appearance:textfield}\n.f .u{font-family:var(--mono);font-size:11.5px;color:var(--gris);padding-left:6px;flex:0 0 auto}\n.f select{cursor:pointer;padding-right:14px}\n.f .sel{position:relative}\n.f .sel::after{content:\"\";position:absolute;right:9px;top:50%;margin-top:-2px;pointer-events:none;\n  border:4px solid transparent;border-top-color:var(--gris)}\n\n/* ---------- boutons ---------- */\n.row{display:flex;gap:7px;flex-wrap:wrap}\n.btn{\n  appearance:none;border:1px solid var(--ligne);background:var(--papier);border-radius:8px;\n  padding:10px 13px;font-family:var(--sans);font-size:13px;font-weight:600;color:var(--ink);\n  cursor:pointer;flex:1 1 auto;min-width:0;white-space:nowrap;transition:background .12s,border-color .12s\n}\n.btn:active{background:#EEF1F5}\n.btn.p{background:var(--violet);border-color:var(--violet);color:#fff}\n.btn.p:active{background:var(--violet-2)}\n.btn:focus-visible{outline:3px solid rgba(42,95,168,.45);outline-offset:1px}\n.seg{display:flex;background:#F4F6F9;border:1px solid var(--ligne);border-radius:8px;padding:2px;gap:2px}\n.seg button{flex:1;appearance:none;border:0;background:transparent;border-radius:6px;padding:8px 4px;\n  font-size:12.5px;font-weight:600;color:var(--gris);cursor:pointer;font-family:var(--sans)}\n.seg button[aria-pressed=\"true\"]{background:var(--papier);color:var(--ink);box-shadow:0 1px 2px rgba(16,20,26,.12)}\n\n/* ---------- plan ---------- */\n.plan{position:relative;background:#FBFCFD;border-bottom:1px solid var(--ligne)}\ncanvas#cv{display:block;width:100%;height:58vh;min-height:280px;touch-action:none}\n.zoom{position:absolute;right:9px;bottom:9px;display:flex;flex-direction:column;gap:5px}\n.zoom button{width:38px;height:38px;border-radius:9px;border:1px solid var(--ligne);background:rgba(255,255,255,.94);\n  font-size:17px;font-weight:600;color:var(--ink);cursor:pointer;font-family:var(--mono);\n  box-shadow:0 1px 3px rgba(16,20,26,.14);display:flex;align-items:center;justify-content:center}\n.zoom button.sm{font-size:10.5px;letter-spacing:.04em}\n.legend{display:flex;gap:14px;flex-wrap:wrap;padding:8px 13px;font-size:12px;color:var(--gris);\n  border-bottom:1px solid var(--ligne);background:#FBFCFD}\n.legend i{display:inline-block;width:17px;height:0;border-top-width:2px;border-top-style:solid;\n  vertical-align:middle;margin-right:5px}\n\n/* ---------- infos / tableau ---------- */\n.info{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:1px;background:var(--ligne);margin:0}\n.info div{background:var(--papier);padding:9px 12px}\n.info dt{font-size:12px;letter-spacing:0;color:var(--gris);font-weight:600;margin:0 0 3px}\n.info dd{margin:0;font-family:var(--mono);font-size:17px;font-weight:600;color:var(--bleu)}\ntable{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px}\nth,td{padding:6px 9px;text-align:right;border-bottom:1px solid #EDF0F4;white-space:nowrap}\nth{font-family:var(--sans);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--gris);\n  font-weight:700;background:#F7F9FB;position:sticky;top:0}\ntd:first-child,th:first-child{text-align:left;color:var(--gris)}\n.scroll{max-height:340px;overflow:auto;-webkit-overflow-scrolling:touch}\n.tbl-title{padding:10px 13px 4px;font-size:11.5px;font-weight:700;color:var(--ink)}\n\n.err{margin:0;padding:12px 13px;background:#FDF1EE;color:#8E2F1B;font-size:13.5px;border-left:3px solid var(--rouge)}\n.note{padding:10px 14px 13px;font-size:12.5px;color:var(--gris);line-height:1.5;margin:0}\n.note:empty{display:none}\n.tools{padding:10px 13px}\n.act{padding:10px 13px 13px;border-top:1px solid var(--ligne)}\n.act .btn.p{font-size:15px;padding:13px}\ndetails.card>summary{list-style:none;cursor:pointer;padding:12px 14px;font-size:15px;font-weight:700;\n  display:flex;justify-content:space-between;align-items:center}\ndetails.card>summary::-webkit-details-marker{display:none}\ndetails.card>summary::after{content:\"+\";font-size:20px;color:var(--gris);font-weight:400}\ndetails.card[open]>summary::after{content:\"\\2212\"}\ndetails.card[open]>summary{border-bottom:1px solid var(--ligne)}\n\n@media print{\n  body{background:#fff}\n  .top,.zoom,.noprint,.card>h2{display:none!important}\n  .wrap{padding:0;max-width:none}\n  .card{box-shadow:none;border-radius:0;margin:0}\n  #printImg{position:static!important;left:auto!important;width:100%!important;display:block!important}\n  #planCard,#coordCard{page-break-inside:avoid}\n}\n#printImg{position:absolute;left:-99999px;top:0;width:1000px}\n\u003c/style>\n\u003c/head>\n\u003cbody>\n\n\u003cheader class=\"top\">\n  \u003cdiv class=\"brand\">\u003cb>Développés\u003c/b>\u003cbutton id=\"isoDevClose\" aria-label=\"Fermer\" style=\"display:none;margin-left:auto;appearance:none;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:18px;line-height:1;width:34px;height:34px;border-radius:8px;cursor:pointer\">✕\u003c/button>\u003c/div>\n  \u003cnav class=\"tabs\" id=\"tabs\" role=\"tablist\">\u003c/nav>\n\u003c/header>\n\n\u003cmain class=\"wrap\">\n\n  \u003csection class=\"card noprint\">\n    \u003ch2>Cotes\u003c/h2>\n    \u003cdiv class=\"body\">\n      \u003cdiv class=\"gt\">Dimensions\u003c/div>\n      \u003cdiv class=\"grid\" id=\"fDim\">\u003c/div>\n      \u003cdiv class=\"gt\">Tôle\u003c/div>\n      \u003cdiv class=\"grid\" id=\"fTole\">\n        \u003cdiv class=\"f\">\u003clabel>Cotes saisies\u003c/label>\u003cdiv class=\"in sel\">\n          \u003cselect id=\"mode\">\u003coption value=\"ext\">Extérieures\u003c/option>\u003coption value=\"int\">Intérieures\u003c/option>\u003coption value=\"moy\">Sur fibre neutre\u003c/option>\u003c/select>\u003c/div>\u003c/div>\n        \u003cdiv class=\"f\">\u003clabel>Matière\u003c/label>\u003cdiv class=\"in sel\">\n          \u003cselect id=\"mat\">\u003coption value=\"7.85\">Acier — 7,85\u003c/option>\u003coption value=\"7.9\">Inox — 7,90\u003c/option>\u003coption value=\"2.7\">Aluminium — 2,70\u003c/option>\u003coption value=\"8.94\">Cuivre — 8,94\u003c/option>\u003coption value=\"7.85|galva\">Galva — 7,85\u003c/option>\u003c/select>\u003c/div>\u003c/div>\n      \u003c/div>\n      \u003cdiv class=\"gt\">Traçage\u003c/div>\n      \u003cdiv class=\"grid\" id=\"fTrace\">\u003c/div>\n    \u003c/div>\n  \u003c/section>\n\n  \u003csection class=\"card\" id=\"planCard\">\n    \u003ch2>Développé \u003cspan class=\"qty\" id=\"pieceQty\">\u003c/span>\u003c/h2>\n    \u003cdiv class=\"tools noprint\">\n      \u003cdiv class=\"seg\" id=\"segView\">\n        \u003cbutton data-v=\"gen\" aria-pressed=\"true\">Génératrices\u003c/button>\n        \u003cbutton data-v=\"cote\" aria-pressed=\"true\">Cotes\u003c/button>\n        \u003cbutton data-v=\"num\" aria-pressed=\"true\">Numéros\u003c/button>\n      \u003c/div>\n    \u003c/div>\n    \u003cdiv id=\"errBox\">\u003c/div>\n    \u003cdiv class=\"plan\">\n      \u003ccanvas id=\"cv\">\u003c/canvas>\n      \u003cdiv class=\"zoom noprint\">\n        \u003cbutton id=\"zIn\" aria-label=\"Agrandir\">+\u003c/button>\n        \u003cbutton id=\"zOut\" aria-label=\"Réduire\">−\u003c/button>\n        \u003cbutton id=\"zFit\" class=\"sm\" aria-label=\"Ajuster à l'écran\">AJUST\u003c/button>\n      \u003c/div>\n    \u003c/div>\n    \u003cdiv class=\"legend noprint\">\n      \u003cspan>\u003ci style=\"border-top-color:#10141A\">\u003c/i>Découpe\u003c/span>\n      \u003cspan>\u003ci style=\"border-top-color:#C8452D;border-top-style:dashed\">\u003c/i>Pli\u003c/span>\n      \u003cspan>\u003ci style=\"border-top-color:#A7B0BC\">\u003c/i>Génératrice\u003c/span>\n      \u003cspan>\u003ci style=\"border-top-color:#14396B\">\u003c/i>Cote\u003c/span>\n    \u003c/div>\n    \u003cdiv class=\"act noprint\">\u003cdiv class=\"row\">\u003cbutton class=\"btn p\" id=\"bVue\">Voir la pièce en 3D\u003c/button>\u003c/div>\u003c/div>\n  \u003c/section>\n\n  \u003csection class=\"card\" id=\"resCard\">\n    \u003ch2>Résultats\u003c/h2>\n    \u003cdl class=\"info\" id=\"info\">\u003c/dl>\n    \u003cp class=\"note\" id=\"note\">\u003c/p>\n  \u003c/section>\n\n  \u003csection class=\"card noprint\">\n    \u003ch2>Exporter\u003c/h2>\n    \u003cdiv class=\"body\">\n      \u003cdiv class=\"row\">\n        \u003cbutton class=\"btn p\" id=\"bDxf\">DXF\u003c/button>\n        \u003cbutton class=\"btn\" id=\"bPng\">PNG\u003c/button>\n        \u003cbutton class=\"btn\" id=\"bPrn\">Imprimer\u003c/button>\n      \u003c/div>\n    \u003c/div>\n  \u003c/section>\n\n  \u003cdetails class=\"card\" id=\"coordCard\">\n    \u003csummary>Coordonnées des génératrices\u003c/summary>\n    \u003cdiv id=\"tables\">\u003c/div>\n  \u003c/details>\n\n  \u003cimg id=\"printImg\" alt=\"\">\n\u003c/main>\n\n\u003cscript>\n\"use strict\";\n/* ============================================================\n   DÉV·CHANTIER — développés de tôlerie\n   Tous les calculs sont menés sur la fibre neutre (Ø médian).\n   ============================================================ */\nconst TAU = Math.PI * 2;\nconst d2r = d => d * Math.PI / 180;\nconst r2d = r => r * 180 / Math.PI;\nconst hyp = Math.hypot;\n\nconst d3 = (a, b) => hyp(a[0] - b[0], a[1] - b[1], a[2] - b[2]);\nconst d2 = (a, b) => hyp(a[0] - b[0], a[1] - b[1]);\nconst sideOf = (p, q, x) => (q[0] - p[0]) * (x[1] - p[1]) - (q[1] - p[1]) * (x[0] - p[0]);\n\n/* nombre -> texte français */\nfunction nf(v, dec) {\n  if (!isFinite(v)) return \"—\";\n  dec = dec === undefined ? 1 : dec;\n  return v.toFixed(dec).replace(\".\", \",\");\n}\n\n/* Point à distance dA de p et dB de q, du côté sgn */\nfunction tri2(p, q, dA, dB, sgn) {\n  const dx = q[0] - p[0], dy = q[1] - p[1], L = hyp(dx, dy);\n  if (L \u003c 1e-9) return [p[0] + dA, p[1]];\n  const a = (dA * dA - dB * dB + L * L) / (2 * L);\n  const h = Math.sqrt(Math.max(0, dA * dA - a * a));\n  const mx = p[0] + a * dx / L, my = p[1] + a * dy / L;\n  return [mx + sgn * h * dy / L, my - sgn * h * dx / L];\n}\n\n/* Dépliage d'une chaîne de triangles : chaque triangle partage\n   exactement 2 sommets avec le précédent. */\nfunction unfoldChain(P, tris) {\n  const D = (a, b) => d3(P[a], P[b]);\n  const out = [];\n  let [i0, j0, k0] = tris[0];\n  let pos = {};\n  pos[i0] = [0, 0];\n  pos[j0] = [D(i0, j0), 0];\n  pos[k0] = tri2(pos[i0], pos[j0], D(i0, k0), D(j0, k0), 1);\n  out.push({ ids: tris[0], pts: { [i0]: pos[i0], [j0]: pos[j0], [k0]: pos[k0] } });\n  let prev = tris[0], prevPos = out[0].pts;\n  for (let t = 1; t \u003c tris.length; t++) {\n    const tri = tris[t];\n    const sh = tri.filter(id => prev.indexOf(id) >= 0);\n    const nw = tri.filter(id => prev.indexOf(id) \u003c 0);\n    if (sh.length !== 2 || nw.length !== 1) throw new Error(\"Chaîne de triangles invalide.\");\n    const s1 = sh[0], s2 = sh[1], n1 = nw[0];\n    const third = prev.filter(id => id !== s1 && id !== s2)[0];\n    const p1 = prevPos[s1], p2 = prevPos[s2], pr = prevPos[third];\n    const c1 = tri2(p1, p2, D(s1, n1), D(s2, n1), 1);\n    const c2 = tri2(p1, p2, D(s1, n1), D(s2, n1), -1);\n    const s = sideOf(p1, p2, pr);\n    const p = (sideOf(p1, p2, c1) * s \u003c 0) ? c1 : c2;\n    const np = { [s1]: p1, [s2]: p2, [n1]: p };\n    out.push({ ids: tri, pts: np });\n    prev = tri; prevPos = np;\n  }\n  return out;\n}\n/* position 2D de chaque sommet (1re occurrence = définitive) */\nfunction posMap(chain) {\n  const m = {};\n  for (const t of chain) for (const id of t.ids) if (!(id in m)) m[id] = t.pts[id];\n  return m;\n}\n\n/* Oriente un développé : grande base en haut, petite base en bas. */\nfunction orient(pm, baseIds, topIds) {\n  const cen = ids => {\n    let x = 0, y = 0;\n    ids.forEach(i => { x += pm[i][0]; y += pm[i][1]; });\n    return [x / ids.length, y / ids.length];\n  };\n  const cb = cen(baseIds), ct = cen(topIds);\n  const a = Math.atan2(cb[1] - ct[1], cb[0] - ct[0]) - Math.PI / 2;\n  const ca = Math.cos(-a), sa = Math.sin(-a);\n  for (const k in pm) {\n    const q = pm[k];\n    pm[k] = [q[0] * ca - q[1] * sa, q[0] * sa + q[1] * ca];\n  }\n  return pm;\n}\n\n/* --- construction de trajets --- */\nconst P = (pts, kind, closed) => ({ pts, kind: kind || \"cut\", closed: !!closed });\nfunction bboxOf(paths) {\n  let x0 = 1e18, y0 = 1e18, x1 = -1e18, y1 = -1e18;\n  for (const p of paths) for (const q of p.pts) {\n    if (q[0] \u003c x0) x0 = q[0]; if (q[0] > x1) x1 = q[0];\n    if (q[1] \u003c y0) y0 = q[1]; if (q[1] > y1) y1 = q[1];\n  }\n  return { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 };\n}\nfunction polyLen(pts, closed) {\n  let L = 0;\n  for (let i = 1; i \u003c pts.length; i++) L += d2(pts[i - 1], pts[i]);\n  if (closed && pts.length > 2) L += d2(pts[pts.length - 1], pts[0]);\n  return L;\n}\n/* aire d'un polygone fermé (valeur absolue) */\nfunction polyArea(pts) {\n  let a = 0;\n  for (let i = 0, n = pts.length; i \u003c n; i++) {\n    const p = pts[i], q = pts[(i + 1) % n];\n    a += p[0] * q[1] - q[0] * p[1];\n  }\n  return Math.abs(a) / 2;\n}\n/* Ø sur fibre neutre selon le mode de cotation */\nfunction med(v, ep, mode) {\n  if (mode === \"ext\") return v - ep;\n  if (mode === \"int\") return v + ep;\n  return v;\n}\n\n/* ============================================================\n   1. TRONC DE CÔNE  (concentrique E=0 / excentrique E≠0)\n   ============================================================ */\nfunction devCone(v, mode) {\n  const ep = v.ep, nd = Math.max(6, Math.round(v.nd));\n  const Dm = med(v.D, ep, mode), H = v.H, E = v.E || 0;\n  const dm = v.d \u003c= 0 ? 0 : med(v.d, ep, mode);   /* Ø 0 = cône entier, pointe fermée */\n  if (Dm \u003c= 0 || dm \u003c 0) throw new Error(\"Les diamètres doivent rester positifs une fois l'épaisseur déduite.\");\n  if (H \u003c= 0) throw new Error(\"La hauteur doit être supérieure à 0.\");\n  const paths = [], gens = [], dims = [], rows = [];\n  let info = [];\n\n  if (Math.abs(Dm - dm) \u003c 1e-6 && Math.abs(E) \u003c 1e-6) {\n    /* --- virole : le développé est un rectangle --- */\n    const W = Math.PI * Dm;\n    paths.push(P([[0, 0], [W, 0], [W, H], [0, H]], \"cut\", true));\n    for (let i = 0; i \u003c= nd; i++) {\n      const x = W * i / nd;\n      gens.push({ n: i + 1, a: [x, 0], b: [x, H], len: H });\n      rows.push([i + 1, nf(x), \"0,0\", nf(x), nf(H), nf(H)]);\n    }\n    dims.push({ t: \"h\", x0: 0, x1: W, y: 0, text: nf(W) });\n    dims.push({ t: \"v\", y0: 0, y1: H, x: 0, text: nf(H) });\n    info = [[\"Développement\", nf(W) + \" mm\"], [\"Hauteur\", nf(H) + \" mm\"],\n      [\"Ø fibre neutre\", nf(Dm) + \" mm\"], [\"Surface\", nf(W * H / 1e6, 3) + \" m²\"],\n      [\"Masse\", nf(W * H * ep / 1e6 * v.rho, 2) + \" kg\"]];\n    return { pieces: [{ name: \"Virole\", qty: 1, paths, gens, dims,\n      table: { cols: [\"N°\", \"X bas\", \"Y bas\", \"X haut\", \"Y haut\", \"Longueur\"], rows } }],\n      info, note: \"Grand Ø = petit Ø sans excentration : c'est une virole, le développé est un rectangle.\" };\n  }\n\n  if (Math.abs(E) \u003c 1e-6) {\n    /* --- développé exact : secteur de couronne --- */\n    const dif = (Dm - dm) / 2;\n    const L = hyp(H, dif);\n    const Rg = L * Dm / (Dm - dm), Rp = Rg - L;\n    const th = Math.PI * Dm / Rg;\n    const a0 = Math.PI / 2 - th / 2, seg = 240;\n    const arcO = [], arcI = [];\n    for (let i = 0; i \u003c= seg; i++) {\n      const a = a0 + th * i / seg;\n      arcO.push([Rg * Math.cos(a), Rg * Math.sin(a)]);\n      arcI.push([Rp * Math.cos(a), Rp * Math.sin(a)]);\n    }\n    paths.push(P(arcO.concat(arcI.slice().reverse()), \"cut\", true));\n    for (let i = 0; i \u003c= nd; i++) {\n      const a = a0 + th * i / nd;\n      const b = [Rg * Math.cos(a), Rg * Math.sin(a)], t = [Rp * Math.cos(a), Rp * Math.sin(a)];\n      gens.push({ n: i + 1, a: b, b: t, len: L });\n      rows.push([i + 1, nf(b[0]), nf(b[1]), nf(t[0]), nf(t[1]), nf(L)]);\n    }\n    const bb = bboxOf(paths);\n    dims.push({ t: \"h\", x0: bb.x0, x1: bb.x1, y: bb.y0, text: nf(bb.w) });\n    dims.push({ t: \"v\", y0: bb.y0, y1: bb.y1, x: bb.x0, text: nf(bb.h) });\n    dims.push({ t: \"note\", x: Rg * Math.cos(a0 + th / 2), y: Rg * Math.sin(a0 + th / 2), dx: 30, dy: 34, text: \"R \" + nf(Rg) });\n    dims.push({ t: \"note\", x: Rp * Math.cos(a0 + th / 2), y: Rp * Math.sin(a0 + th / 2), dx: 30, dy: -34, text: \"r \" + nf(Rp) });\n    dims.push({ t: \"note\", x: 0, y: 0, dx: 34, dy: 22, text: nf(r2d(th), 2) + \"°\" });\n    const S = th / 2 * (Rg * Rg - Rp * Rp);\n    info = [\n      [\"Génératrice\", nf(L) + \" mm\"], [\"Grand rayon R\", nf(Rg) + \" mm\"],\n      [\"Petit rayon r\", nf(Rp) + \" mm\"], [\"Angle du secteur\", nf(r2d(th), 2) + \"°\"],\n      [\"Développée grand Ø\", nf(Math.PI * Dm) + \" mm\"], [\"Demi-angle au sommet\", nf(r2d(Math.atan2((Dm - dm) / 2, H)), 2) + \"°\"],\n      [\"Surface\", nf(S / 1e6, 3) + \" m²\"], [\"Masse\", nf(S * ep / 1e6 * v.rho, 2) + \" kg\"]\n    ];\n    return {\n      pieces: [{ name: \"Tronc de cône concentrique\", qty: 1, paths, gens, dims,\n        table: { cols: [\"N°\", \"X grand Ø\", \"Y grand Ø\", \"X petit Ø\", \"Y petit Ø\", \"Longueur\"], rows } }],\n      info, note: \"Développé exact (secteur de couronne). Le repère est centré sur le sommet du cône.\"\n    };\n  }\n\n  /* --- développé par triangulation (cône oblique) --- */\n  const R1 = Dm / 2, R2 = Math.max(dm, Dm * 1e-4) / 2;\n  const K = Math.max(1, Math.ceil(180 / nd)), NR = nd * K;\n  const pts = {}, tris = [];\n  for (let i = 0; i \u003c= NR; i++) {\n    const a = TAU * i / NR;\n    pts[\"b\" + i] = [R1 * Math.cos(a), R1 * Math.sin(a), 0];\n    pts[\"t\" + i] = [E + R2 * Math.cos(a), R2 * Math.sin(a), H];\n  }\n  for (let i = 0; i \u003c NR; i++) {\n    tris.push([\"b\" + i, \"t\" + i, \"b\" + (i + 1)]);\n    tris.push([\"t\" + i, \"b\" + (i + 1), \"t\" + (i + 1)]);\n  }\n  const ids = { b: [], t: [] };\n  for (let i = 0; i \u003c= NR; i++) { ids.b.push(\"b\" + i); ids.t.push(\"t\" + i); }\n  const pm = orient(posMap(unfoldChain(pts, tris)), ids.b, ids.t);\n  const bot = [], top = [];\n  for (let i = 0; i \u003c= NR; i++) { bot.push(pm[\"b\" + i]); top.push(pm[\"t\" + i]); }\n  paths.push(P(bot.concat(top.slice().reverse()), \"cut\", true));\n  for (let i = 0; i \u003c= NR; i += K) {\n    const n = i / K + 1, L = d3(pts[\"b\" + i], pts[\"t\" + i]);\n    gens.push({ n, a: pm[\"b\" + i], b: pm[\"t\" + i], len: L });\n    rows.push([n, nf(pm[\"b\" + i][0]), nf(pm[\"b\" + i][1]), nf(pm[\"t\" + i][0]), nf(pm[\"t\" + i][1]), nf(L)]);\n  }\n  const bb = bboxOf(paths);\n  dims.push({ t: \"h\", x0: bb.x0, x1: bb.x1, y: bb.y0, text: nf(bb.w) });\n  dims.push({ t: \"v\", y0: bb.y0, y1: bb.y1, x: bb.x0, text: nf(bb.h) });\n  let S = 0;\n  for (let i = 0; i \u003c NR; i++) {\n    S += triArea3(pts[\"b\" + i], pts[\"t\" + i], pts[\"b\" + (i + 1)]);\n    S += triArea3(pts[\"t\" + i], pts[\"b\" + (i + 1)], pts[\"t\" + (i + 1)]);\n  }\n  const gmin = Math.min.apply(null, gens.map(g => g.len)), gmax = Math.max.apply(null, gens.map(g => g.len));\n  info = [\n    [\"Génératrice mini\", nf(gmin) + \" mm\"], [\"Génératrice maxi\", nf(gmax) + \" mm\"],\n    [\"Développée grand Ø\", nf(Math.PI * Dm) + \" mm\"], [\"Développée petit Ø\", nf(Math.PI * dm) + \" mm\"],\n    [\"Excentration\", nf(E) + \" mm\"], [\"Encombrement\", nf(bb.w) + \" × \" + nf(bb.h) + \" mm\"],\n    [\"Surface\", nf(S / 1e6, 3) + \" m²\"], [\"Masse\", nf(S * ep / 1e6 * v.rho, 2) + \" kg\"]\n  ];\n  return {\n    pieces: [{ name: \"Tronc de cône excentrique\", qty: 1, paths, gens, dims,\n      table: { cols: [\"N°\", \"X grand Ø\", \"Y grand Ø\", \"X petit Ø\", \"Y petit Ø\", \"Longueur\"], rows } }],\n    info, note: \"Développé par triangulation (\" + NR + \" divisions de calcul, \" + nd + \" génératrices affichées). Joint sur la génératrice la plus courte.\"\n  };\n}\nfunction triArea3(a, b, c) {\n  const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];\n  return 0.5 * hyp(u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]);\n}\n\n/* ============================================================\n   2. COUDE À SEGMENTS\n   ============================================================ */\nfunction devCoude(v, mode) {\n  const ep = v.ep, nd = Math.max(8, Math.round(v.nd));\n  const Dm = med(v.D, ep, mode), R = v.R, A = v.A, N = Math.max(2, Math.round(v.N));\n  if (Dm \u003c= 0) throw new Error(\"Le diamètre doit rester positif une fois l'épaisseur déduite.\");\n  if (R \u003c= Dm / 2) throw new Error(\"Le rayon de cintrage doit dépasser \" + nf(Dm / 2) + \" mm (rayon du tube), sinon l'intrados est négatif.\");\n  if (A \u003c= 0 || A > 180) throw new Error(\"L'angle du coude doit être compris entre 0 et 180°.\");\n\n  const cuts = N - 1, phi = d2r(A) / (2 * cuts);\n  const tf = Math.tan(phi), e = (Dm / 2) * tf;\n  const Lf = 2 * R * tf, Lh = R * tf;\n  const dev = Math.PI * Dm;\n  const flip = v.dep === \"intrados\" ? -1 : 1;\n  const SEG = 240;\n  const mk = (isHalf) => {\n    const Lm = isHalf ? Lh : Lf;\n    const low = [], up = [];\n    for (let i = 0; i \u003c= SEG; i++) {\n      const th = TAU * i / SEG, x = (Dm / 2) * th, c = flip * Math.cos(th);\n      low.push([x, isHalf ? 0 : e * (1 - c)]);\n      up.push([x, isHalf ? Lm + e * c : Lm + e * (1 + c)]);\n    }\n    const paths = [P(low.concat(up.slice().reverse()), \"cut\", true)];\n    const gens = [], rows = [];\n    for (let i = 0; i \u003c= nd; i++) {\n      const th = TAU * i / nd, x = (Dm / 2) * th, c = flip * Math.cos(th);\n      const yb = isHalf ? 0 : e * (1 - c), yt = isHalf ? Lm + e * c : Lm + e * (1 + c);\n      gens.push({ n: i + 1, a: [x, yb], b: [x, yt], len: yt - yb });\n      rows.push([i + 1, nf(x), nf(yb), nf(yt), nf(yt - yb)]);\n    }\n    const bb = bboxOf(paths);\n    const dims = [\n      { t: \"h\", x0: 0, x1: dev, y: bb.y0, text: nf(dev) },\n      { t: \"v\", y0: bb.y0, y1: bb.y1, x: 0, text: nf(bb.h) }\n    ];\n    return { paths, gens, dims, rows, S: dev * Lm, bb,\n      table: { cols: [\"N°\", \"X\", \"Y bas\", \"Y haut\", \"Hauteur\"], rows } };\n  };\n  const half = mk(true), full = mk(false);\n  const pieces = [{ name: \"Demi-élément\", qty: 2, paths: half.paths, gens: half.gens, dims: half.dims, table: half.table }];\n  if (N > 2) pieces.push({ name: \"Élément entier\", qty: N - 2, paths: full.paths, gens: full.gens, dims: full.dims, table: full.table });\n\n  const S = 2 * half.S + (N - 2) * full.S;\n  const extra = (2 * R + Dm) * tf, intra = (2 * R - Dm) * tf;\n  const info = [\n    [\"Éléments\", N > 2 ? N + \" (2 demis + \" + (N - 2) + \" entiers)\" : \"2 demis\"],\n    [\"Coupes\", cuts + \" à \" + nf(r2d(phi), 2) + \"°\"],\n    [\"Déviation par coupe\", nf(A / cuts, 2) + \"°\"],\n    [\"Développement\", nf(dev) + \" mm\"],\n    [\"Demi · extrados / intrados\", nf(extra / 2) + \" / \" + nf(intra / 2) + \" mm\"]\n  ];\n  if (N > 2) info.push([\"Entier · extrados / intrados\", nf(extra) + \" / \" + nf(intra) + \" mm\"]);\n  info.push([\"Somme des extrados\", nf(2 * half.bb.h + (N - 2) * full.bb.h) + \" mm\"]);\n  info.push([\"Masse totale\", nf(S * ep / 1e6 * v.rho, 2) + \" kg\"]);\n  return { pieces, info,\n    note: \"Angle de coupe mesuré depuis la perpendiculaire à l'axe. Génératrice n° 1 sur l'\" + (flip === 1 ? \"extrados\" : \"intrados\") + \". Retourner un élément sur deux pour l'imbrication sur la tôle.\" };\n}\n\n/* ============================================================\n   3. PIQUAGE CYLINDRE / CYLINDRE\n   ============================================================ */\nfunction devPiquage(v, mode) {\n  const ep = v.ep, nd = Math.max(8, Math.round(v.nd));\n  const Dm = med(v.D, ep, mode), dm = med(v.d, ep, mode);\n  const R = Dm / 2, r = dm / 2, th = d2r(v.ang), E = v.E || 0, Lt = v.L;\n  if (R \u003c= 0 || r \u003c= 0) throw new Error(\"Les diamètres doivent rester positifs une fois l'épaisseur déduite.\");\n  if (r > R) throw new Error(\"Le piquage (Ø \" + nf(dm) + \") est plus gros que le tube principal (Ø \" + nf(Dm) + \").\");\n  if (r + Math.abs(E) > R - 1e-6) throw new Error(\"Avec cette excentration le piquage sort du tube : \" + nf(r + Math.abs(E)) + \" > \" + nf(R) + \" mm.\");\n  if (v.ang \u003c 15 || v.ang > 90) throw new Error(\"L'angle du piquage doit être compris entre 15 et 90°.\");\n\n  const K = Math.max(1, Math.ceil(240 / nd)), NR = nd * K;\n  const tAt = a => {\n    const yv = E + r * Math.sin(a), z = Math.sqrt(Math.max(0, R * R - yv * yv));\n    return (z - r * Math.cos(a) * Math.cos(th)) / Math.sin(th);\n  };\n  let tmin = 1e18, tmax = -1e18;\n  for (let i = 0; i \u003c= NR; i++) { const t = tAt(TAU * i / NR); if (t \u003c tmin) tmin = t; if (t > tmax) tmax = t; }\n  if (Lt \u003c= tmax) throw new Error(\"Longueur trop courte : il faut au moins \" + nf(tmax + 1) + \" mm depuis l'axe du tube principal.\");\n\n  /* --- pièce 1 : le piquage --- */\n  const cut = [], yTop = Lt - tmin;\n  for (let i = 0; i \u003c= NR; i++) { const a = TAU * i / NR; cut.push([r * a, tAt(a) - tmin]); }\n  const pA = [P(cut.concat([[r * TAU, yTop], [0, yTop]]), \"cut\", true)];\n  const gA = [], rowsA = [];\n  for (let i = 0; i \u003c= nd; i++) {\n    const a = TAU * i / nd, x = r * a, yb = tAt(a) - tmin;\n    gA.push({ n: i + 1, a: [x, yb], b: [x, yTop], len: yTop - yb });\n    rowsA.push([i + 1, nf(x), nf(yb), nf(yTop - yb)]);\n  }\n  const bbA = bboxOf(pA);\n  const dA = [{ t: \"h\", x0: 0, x1: r * TAU, y: 0, text: nf(r * TAU) },\n              { t: \"v\", y0: 0, y1: yTop, x: 0, text: nf(yTop) }];\n\n  /* --- pièce 2 : le trou dans le tube principal --- */\n  const hole = [];\n  for (let i = 0; i \u003c NR; i++) {\n    const a = TAU * i / NR, yv = E + r * Math.sin(a), z = Math.sqrt(Math.max(0, R * R - yv * yv));\n    hole.push([tAt(a) * Math.cos(th) - r * Math.cos(a) * Math.sin(th), R * Math.atan2(yv, z)]);\n  }\n  const bbH = bboxOf([P(hole, \"cut\", true)]);\n  const cx = (bbH.x0 + bbH.x1) / 2, cy = (bbH.y0 + bbH.y1) / 2;\n  const pB = [P(hole, \"cut\", true),\n    P([[cx - bbH.w / 2 - 14, cy], [cx + bbH.w / 2 + 14, cy]], \"gen\"),\n    P([[cx, cy - bbH.h / 2 - 14], [cx, cy + bbH.h / 2 + 14]], \"gen\")];\n  const gB = [], rowsB = [];\n  for (let i = 0; i \u003c= nd; i++) {\n    const a = TAU * i / nd, yv = E + r * Math.sin(a), z = Math.sqrt(Math.max(0, R * R - yv * yv));\n    const px = tAt(a) * Math.cos(th) - r * Math.cos(a) * Math.sin(th), py = R * Math.atan2(yv, z);\n    gB.push({ n: i + 1, a: [px, py], b: [px, py], len: 0, dot: true });\n    rowsB.push([i + 1, nf(px), nf(py)]);\n  }\n  const dB = [{ t: \"h\", x0: bbH.x0, x1: bbH.x1, y: bbH.y0, text: nf(bbH.w) },\n              { t: \"v\", y0: bbH.y0, y1: bbH.y1, x: bbH.x0, text: nf(bbH.h) }];\n\n  const weld = polyLen(hole, true);\n  const info = [\n    [\"Angle du piquage\", nf(v.ang, 1) + \"°\"], [\"Excentration\", nf(E) + \" mm\"],\n    [\"Développement piquage\", nf(r * TAU) + \" mm\"],\n    [\"Longueur maxi\", nf(yTop) + \" mm\"], [\"Longueur mini\", nf(Lt - tmax) + \" mm\"],\n    [\"Trou\", nf(bbH.w) + \" × \" + nf(bbH.h) + \" mm\"],\n    [\"Longueur de soudure\", nf(weld) + \" mm\"],\n    [\"Masse piquage\", nf(polyArea(pA[0].pts) * ep / 1e6 * v.rho, 2) + \" kg\"]\n  ];\n  return {\n    pieces: [\n      { name: \"Piquage — développement\", qty: 1, paths: pA, gens: gA, dims: dA,\n        table: { cols: [\"N°\", \"X\", \"Y coupe\", \"Hauteur\"], rows: rowsA } },\n      { name: \"Trou dans le tube principal\", qty: 1, paths: pB, gens: gB, dims: dB,\n        table: { cols: [\"N°\", \"X (axe du tube)\", \"Y (circonférence)\"], rows: rowsB } }\n    ],\n    info, note: \"Longueur du piquage mesurée depuis l'axe du tube principal. Le trou est tracé sur le développement du tube principal : X le long de l'axe, Y suivant la circonférence à partir de la génératrice de piquage.\"\n  };\n}\n\n/* ============================================================\n   4. TRANSITION CARRÉ / RECTANGLE — ROND\n   ============================================================ */\nfunction devCarreRond(v, mode) {\n  const ep = v.ep;\n  let nd = Math.max(8, Math.round(v.nd / 4) * 4);\n  const a = med(v.a, ep, mode), b = med(v.b, ep, mode), dm = med(v.d, ep, mode);\n  const H = v.H, dx = v.dx || 0, dy = v.dy || 0, rr = dm / 2;\n  if (a \u003c= 0 || b \u003c= 0 || dm \u003c= 0) throw new Error(\"Les cotes doivent rester positives une fois l'épaisseur déduite.\");\n  if (H \u003c= 0) throw new Error(\"La hauteur doit être supérieure à 0.\");\n\n  const q = nd / 4, Kf = Math.max(1, Math.ceil(45 / q)), QR = q * Kf, TOT = QR * 4;\n  const K = [[a / 2, b / 2, 0], [-a / 2, b / 2, 0], [-a / 2, -b / 2, 0], [a / 2, -b / 2, 0]];\n  const pts = {}, tris = [];\n  for (let i = 0; i \u003c= TOT; i++) {\n    const t = TAU * i / TOT;\n    pts[\"A\" + i] = [dx + rr * Math.cos(t), dy + rr * Math.sin(t), H];\n  }\n  for (let c = 0; c \u003c 4; c++) pts[\"K\" + c] = K[c];\n  pts[\"K4\"] = K[0];\n  for (let c = 0; c \u003c 4; c++) {\n    for (let i = c * QR; i \u003c (c + 1) * QR; i++) tris.push([\"K\" + c, \"A\" + i, \"A\" + (i + 1)]);\n    tris.push([\"K\" + c, \"A\" + ((c + 1) * QR), \"K\" + (c + 1)]);\n  }\n  const arcIds = [];\n  for (let i = 0; i \u003c= TOT; i++) arcIds.push(\"A\" + i);\n  const pm = orient(posMap(unfoldChain(pts, tris)), [\"K0\", \"K1\", \"K2\", \"K3\", \"K4\"], arcIds);\n\n  const base = [pm.K0, pm.K1, pm.K2, pm.K3, pm.K4];\n  const arc = []; for (let i = 0; i \u003c= TOT; i++) arc.push(pm[\"A\" + i]);\n  const outline = base.concat([arc[TOT]], arc.slice().reverse().slice(1));\n  const paths = [P(outline, \"cut\", true)];\n  for (let c = 0; c \u003c 4; c++) {\n    if (c > 0) paths.push(P([pm[\"K\" + c], pm[\"A\" + (c * QR)]], \"fold\"));\n    paths.push(P([pm[\"K\" + c], pm[\"A\" + ((c + 1) * QR)]], \"fold\"));\n  }\n  const gens = [], rows = [];\n  let n = 1;\n  for (let c = 0; c \u003c 4; c++) {\n    for (let i = c * QR; i \u003c= (c + 1) * QR; i += Kf) {\n      if (i % QR === 0 && i !== c * QR) continue;\n      const L = d3(pts[\"K\" + c], pts[\"A\" + i]);\n      gens.push({ n, a: pm[\"K\" + c], b: pm[\"A\" + i], len: L });\n      rows.push([n, \"K\" + (c + 1), nf(pm[\"A\" + i][0]), nf(pm[\"A\" + i][1]), nf(L)]);\n      n++;\n    }\n  }\n  const bb = bboxOf([paths[0]]);\n  const dims = [\n    { t: \"h\", x0: bb.x0, x1: bb.x1, y: bb.y0, text: nf(bb.w) },\n    { t: \"v\", y0: bb.y0, y1: bb.y1, x: bb.x0, text: nf(bb.h) }\n  ];\n  let S = 0;\n  for (const t of tris) S += triArea3(pts[t[0]], pts[t[1]], pts[t[2]]);\n  const lm = gens.map(g => g.len);\n  const info = [\n    [\"Base\", nf(a) + \" × \" + nf(b) + \" mm\"], [\"Ø haut\", nf(dm) + \" mm\"],\n    [\"Hauteur\", nf(H) + \" mm\"], [\"Décentrage\", nf(dx) + \" / \" + nf(dy) + \" mm\"],\n    [\"Élément mini\", nf(Math.min.apply(null, lm)) + \" mm\"],\n    [\"Élément maxi\", nf(Math.max.apply(null, lm)) + \" mm\"],\n    [\"Encombrement\", nf(bb.w) + \" × \" + nf(bb.h) + \" mm\"],\n    [\"Masse\", nf(S * ep / 1e6 * v.rho, 2) + \" kg\"]\n  ];\n  return {\n    pieces: [{ name: \"Transition carré → rond\", qty: 1, paths, gens, dims,\n      table: { cols: [\"N°\", \"Coin\", \"X\", \"Y\", \"Longueur vraie\"], rows } }],\n    info, note: \"Quatre pans plats (traits rouges = plis) et quatre quarts de cône aux angles. Joint sur l'élément du coin K1. Développé par triangulation, \" + TOT + \" divisions de calcul.\"\n  };\n}\n\n/* ============================================================\n   Définition des pièces et de leurs cotes\n   ============================================================ */\nconst SHAPES = [\n  { id: \"cone\", tab: \"Tronc de cône\", fn: devCone, fields: [\n    { k: \"D\", l: \"Grand Ø\", v: 500 }, { k: \"d\", l: \"Petit Ø\", v: 250 },\n    { k: \"H\", l: \"Hauteur\", v: 400 }, { k: \"E\", l: \"Excentration\", v: 0 },\n    { k: \"ep\", l: \"Épaisseur\", v: 2 }, { k: \"nd\", l: \"Génératrices\", v: 24, u: \"\" } ] },\n  { id: \"coude\", tab: \"Coude à segments\", fn: devCoude, fields: [\n    { k: \"D\", l: \"Ø tube\", v: 300 }, { k: \"R\", l: \"Rayon de cintrage\", v: 450 },\n    { k: \"A\", l: \"Angle du coude\", v: 90, u: \"°\" }, { k: \"N\", l: \"Nombre d’éléments\", v: 5, u: \"\" },\n    { k: \"ep\", l: \"Épaisseur\", v: 3 }, { k: \"nd\", l: \"Génératrices\", v: 24, u: \"\" },\n    { k: \"dep\", l: \"Génératrice n° 1\", type: \"select\", opts: [[\"extrados\", \"Extrados\"], [\"intrados\", \"Intrados\"]] } ] },\n  { id: \"piquage\", tab: \"Piquage\", fn: devPiquage, fields: [\n    { k: \"D\", l: \"Ø tube principal\", v: 400 }, { k: \"d\", l: \"Ø piquage\", v: 200 },\n    { k: \"ang\", l: \"Angle\", v: 90, u: \"°\" }, { k: \"E\", l: \"Excentration\", v: 0 },\n    { k: \"L\", l: \"Longueur / axe\", v: 450 }, { k: \"ep\", l: \"Épaisseur\", v: 3 },\n    { k: \"nd\", l: \"Génératrices\", v: 24, u: \"\" } ] },\n  { id: \"cr\", tab: \"Carré → rond\", fn: devCarreRond, fields: [\n    { k: \"a\", l: \"Base X\", v: 500 }, { k: \"b\", l: \"Base Y\", v: 400 },\n    { k: \"d\", l: \"Ø haut\", v: 300 }, { k: \"H\", l: \"Hauteur\", v: 450 },\n    { k: \"dx\", l: \"Décentrage X\", v: 0 }, { k: \"dy\", l: \"Décentrage Y\", v: 0 },\n    { k: \"ep\", l: \"Épaisseur\", v: 1.5 }, { k: \"nd\", l: \"Divisions du cercle\", v: 24, u: \"\" } ] }\n];\n\nconst COL = { cut: \"#10141A\", fold: \"#C8452D\", gen: \"#A7B0BC\", dim: \"#14396B\", num: \"#6B7683\" };\nconst store = {};\nSHAPES.forEach(s => { store[s.id] = {}; s.fields.forEach(f => store[s.id][f.k] = f.type === \"select\" ? f.opts[0][0] : f.v); });\n\nlet cur = SHAPES[0], dev = null, err = null;\nlet view = { s: 1, tx: 0, ty: 0, ready: false };\nlet show = { gen: true, cote: true, num: true };\n\nconst $ = id => document.getElementById(id);\nconst cv = $(\"cv\"), ctx = cv.getContext(\"2d\");\n\n/* ============================================================\n   Interface — onglets et champs\n   ============================================================ */\nfunction buildTabs() {\n  $(\"tabs\").innerHTML = \"\";\n  SHAPES.forEach(s => {\n    const b = document.createElement(\"button\");\n    b.className = \"tab\"; b.textContent = s.tab; b.setAttribute(\"role\", \"tab\");\n    b.setAttribute(\"aria-selected\", s === cur ? \"true\" : \"false\");\n    b.onclick = () => { cur = s; view.ready = false; buildTabs(); buildFields(); compute(); };\n    $(\"tabs\").appendChild(b);\n  });\n}\nfunction fieldGroup(f) {\n  if (f.k === \"ep\") return \"fTole\";\n  if (f.k === \"nd\" || f.k === \"dep\") return \"fTrace\";\n  return \"fDim\";\n}\nfunction buildFields() {\n  $(\"fDim\").innerHTML = \"\"; $(\"fTrace\").innerHTML = \"\";\n  Array.from($(\"fTole\").querySelectorAll(\".dyn\")).forEach(n => n.remove());\n  cur.fields.forEach(f => {\n    const d = document.createElement(\"div\"); d.className = \"f dyn\";\n    const lb = document.createElement(\"label\"); lb.textContent = f.l; d.appendChild(lb);\n    const box = document.createElement(\"div\"); box.className = \"in\" + (f.type === \"select\" ? \" sel\" : \"\");\n    if (f.type === \"select\") {\n      const s = document.createElement(\"select\");\n      f.opts.forEach(o => { const op = document.createElement(\"option\"); op.value = o[0]; op.textContent = o[1]; s.appendChild(op); });\n      s.value = store[cur.id][f.k];\n      s.onchange = () => { store[cur.id][f.k] = s.value; compute(); };\n      box.appendChild(s);\n    } else {\n      const i = document.createElement(\"input\");\n      i.type = \"text\"; i.inputMode = \"decimal\"; i.value = String(store[cur.id][f.k]).replace(\".\", \",\");\n      i.oninput = () => {\n        const n = parseFloat(i.value.replace(\",\", \".\"));\n        if (isFinite(n)) { store[cur.id][f.k] = n; compute(); }\n      };\n      box.appendChild(i);\n      const u = document.createElement(\"span\"); u.className = \"u\"; u.textContent = f.u === undefined ? \"mm\" : f.u;\n      if (u.textContent) box.appendChild(u);\n    }\n    d.appendChild(box);\n    const g = $(fieldGroup(f));\n    if (g.id === \"fTole\") g.insertBefore(d, g.firstChild); else g.appendChild(d);\n  });\n}\n\n/* ============================================================\n   Calcul + mise en page des pièces\n   ============================================================ */\nfunction compute() {\n  const v = Object.assign({}, store[cur.id]);\n  v.rho = parseFloat($(\"mat\").value);\n  err = null;\n  try {\n    dev = cur.fn(v, $(\"mode\").value);\n    let x = 0, gap = 0;\n    dev.pieces.forEach(p => {\n      const bb = bboxOf(p.paths);\n      p.bb = bb; gap = Math.max(gap, bb.w * 0.14, bb.h * 0.14);\n    });\n    dev.pieces.forEach(p => { p.off = [x - p.bb.x0, -p.bb.y0]; x += p.bb.w + gap; });\n    dev.bb = { x0: 0, y0: 0, x1: x - gap, y1: Math.max.apply(null, dev.pieces.map(p => p.bb.h)) };\n    dev.bb.w = dev.bb.x1; dev.bb.h = dev.bb.y1;\n  } catch (e) { dev = null; err = e.message; }\n  paintInfo();\n  if (typeof pushModel === \"function\") pushModel();\n  if (!view.ready) fit(); else draw();\n}\n\nfunction paintInfo() {\n  $(\"errBox\").innerHTML = err ? '\u003cp class=\"err\">' + err + \"\u003c/p>\" : \"\";\n  $(\"info\").innerHTML = \"\";\n  $(\"tables\").innerHTML = \"\";\n  $(\"note\").textContent = dev ? dev.note : \"\";\n  $(\"pieceQty\").textContent = dev ? dev.pieces.map(p => p.qty + \" × \" + p.name.toLowerCase()).join(\"  ·  \") : \"\";\n  if (!dev) return;\n  dev.info.forEach(kv => {\n    const d = document.createElement(\"div\");\n    d.innerHTML = \"\u003cdt>\" + kv[0] + \"\u003c/dt>\u003cdd>\" + kv[1] + \"\u003c/dd>\";\n    $(\"info\").appendChild(d);\n  });\n  dev.pieces.forEach(p => {\n    if (!p.table) return;\n    const h = document.createElement(\"div\"); h.className = \"tbl-title\";\n    h.textContent = p.name + \" — \" + p.qty + \" pièce\" + (p.qty > 1 ? \"s\" : \"\");\n    const sc = document.createElement(\"div\"); sc.className = \"scroll\";\n    let html = \"\u003ctable>\u003cthead>\u003ctr>\" + p.table.cols.map(c => \"\u003cth>\" + c + \"\u003c/th>\").join(\"\") + \"\u003c/tr>\u003c/thead>\u003ctbody>\";\n    p.table.rows.forEach(r => { html += \"\u003ctr>\" + r.map(c => \"\u003ctd>\" + c + \"\u003c/td>\").join(\"\") + \"\u003c/tr>\"; });\n    sc.innerHTML = html + \"\u003c/tbody>\u003c/table>\";\n    $(\"tables\").appendChild(h); $(\"tables\").appendChild(sc);\n  });\n}\n\n/* ============================================================\n   Rendu canvas\n   ============================================================ */\nfunction sizeCanvas() {\n  const dpr = Math.min(3, window.devicePixelRatio || 1);\n  const w = cv.clientWidth, h = cv.clientHeight;\n  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);\n  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);\n  return { w, h };\n}\nfunction fit() {\n  const { w, h } = sizeCanvas();\n  if (!dev) { draw(); return; }\n  const m = 54;\n  const s = Math.min((w - 2 * m) / Math.max(1, dev.bb.w), (h - 2 * m) / Math.max(1, dev.bb.h));\n  view.s = s > 0 && isFinite(s) ? s : 1;\n  view.tx = w / 2 - (dev.bb.w / 2) * view.s;\n  view.ty = h / 2 + (dev.bb.h / 2) * view.s;\n  view.ready = true;\n  draw();\n}\nconst SX = x => x * view.s + view.tx;\nconst SY = y => view.ty - y * view.s;\n\nfunction draw(target, W, H) {\n  const c = target || ctx;\n  const w = W || cv.clientWidth, h = H || cv.clientHeight;\n  c.save();\n  c.fillStyle = \"#FBFCFD\"; c.fillRect(0, 0, w, h);\n  if (!dev) { c.restore(); return; }\n  grid(c, w, h);\n  dev.pieces.forEach(p => drawPiece(c, p));\n  ruler(c, w, h);\n  c.restore();\n}\n\nfunction grid(c, w, h) {\n  const steps = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000];\n  let st = steps.find(s => s * view.s >= 26) || 2000;\n  c.strokeStyle = \"#EDF1F5\"; c.lineWidth = 1; c.beginPath();\n  const x0 = Math.floor((0 - view.tx) / view.s / st) * st, x1 = (w - view.tx) / view.s;\n  for (let x = x0; x \u003c= x1; x += st) { const sx = Math.round(SX(x)) + .5; c.moveTo(sx, 0); c.lineTo(sx, h); }\n  const y0 = Math.floor((view.ty - h) / view.s / st) * st, y1 = view.ty / view.s;\n  for (let y = y0; y \u003c= y1; y += st) { const sy = Math.round(SY(y)) + .5; c.moveTo(0, sy); c.lineTo(w, sy); }\n  c.stroke();\n}\n\nfunction drawPiece(c, p) {\n  const ox = p.off[0], oy = p.off[1];\n  const X = x => SX(x + ox), Y = y => SY(y + oy);\n  /* génératrices */\n  if (show.gen) {\n    c.strokeStyle = COL.gen; c.lineWidth = 1; c.setLineDash([]);\n    c.beginPath();\n    p.gens.forEach(g => { if (!g.dot) { c.moveTo(X(g.a[0]), Y(g.a[1])); c.lineTo(X(g.b[0]), Y(g.b[1])); } });\n    c.stroke();\n    c.fillStyle = COL.gen;\n    p.gens.forEach(g => { if (g.dot) { c.beginPath(); c.arc(X(g.a[0]), Y(g.a[1]), 2.2, 0, TAU); c.fill(); } });\n  }\n  /* trajets */\n  p.paths.forEach(pa => {\n    if (pa.kind === \"gen\" && !show.gen) return;\n    c.beginPath();\n    pa.pts.forEach((q, i) => { const sx = X(q[0]), sy = Y(q[1]); i ? c.lineTo(sx, sy) : c.moveTo(sx, sy); });\n    if (pa.closed) c.closePath();\n    if (pa.kind === \"fold\") { c.strokeStyle = COL.fold; c.lineWidth = 1.4; c.setLineDash([7, 4]); }\n    else if (pa.kind === \"gen\") { c.strokeStyle = COL.gen; c.lineWidth = 1; c.setLineDash([3, 3]); }\n    else { c.strokeStyle = COL.cut; c.lineWidth = 2; c.setLineDash([]); }\n    c.stroke(); c.setLineDash([]);\n  });\n  /* numéros */\n  if (show.num && p.gens.length \u003c= 60) {\n    c.fillStyle = COL.num; c.font = \"600 10px \" + MONO; c.textAlign = \"center\"; c.textBaseline = \"middle\";\n    const cxp = SX(p.bb.x0 + ox + p.bb.w / 2), cyp = SY(p.bb.y0 + oy + p.bb.h / 2);\n    p.gens.forEach(g => {\n      const sx = X(g.a[0]), sy = Y(g.a[1]);\n      const dx = sx - cxp, dy = sy - cyp, L = hyp(dx, dy) || 1;\n      c.fillText(String(g.n), sx + dx / L * 11, sy + dy / L * 11);\n    });\n  }\n  /* cotes */\n  if (show.cote) p.dims.forEach(d => dimDraw(c, d, X, Y));\n  /* nom de la pièce */\n  c.fillStyle = \"#10141A\"; c.font = \"700 11px \" + SANS; c.textAlign = \"left\"; c.textBaseline = \"alphabetic\";\n  c.fillText(p.name.toUpperCase() + (p.qty > 1 ? \"  ×\" + p.qty : \"\"), X(p.bb.x0), Y(p.bb.y1) - 12);\n}\n\nconst MONO = 'ui-monospace,\"SF Mono\",Menlo,Consolas,monospace';\nconst SANS = '-apple-system,BlinkMacSystemFont,\"Helvetica Neue\",Arial,sans-serif';\n\nfunction arrow(c, x, y, a) {\n  c.beginPath(); c.moveTo(x, y);\n  c.lineTo(x + 7 * Math.cos(a + .32), y + 7 * Math.sin(a + .32));\n  c.lineTo(x + 7 * Math.cos(a - .32), y + 7 * Math.sin(a - .32));\n  c.closePath(); c.fill();\n}\nfunction dimDraw(c, d, X, Y) {\n  c.strokeStyle = COL.dim; c.fillStyle = COL.dim; c.lineWidth = 1; c.setLineDash([]);\n  c.font = \"600 11px \" + MONO;\n  if (d.t === \"h\") {\n    const y = Y(d.y) + 30, x0 = X(d.x0), x1 = X(d.x1);\n    c.beginPath();\n    c.moveTo(x0, Y(d.y) + 4); c.lineTo(x0, y + 5);\n    c.moveTo(x1, Y(d.y) + 4); c.lineTo(x1, y + 5);\n    c.moveTo(x0, y); c.lineTo(x1, y); c.stroke();\n    arrow(c, x0, y, 0); arrow(c, x1, y, Math.PI);\n    c.textAlign = \"center\"; c.textBaseline = \"bottom\";\n    const t = d.text, tw = c.measureText(t).width;\n    c.fillStyle = \"rgba(255,255,255,.88)\"; c.fillRect((x0 + x1) / 2 - tw / 2 - 3, y - 14, tw + 6, 13);\n    c.fillStyle = COL.dim; c.fillText(t, (x0 + x1) / 2, y - 2);\n  } else if (d.t === \"v\") {\n    const x = X(d.x) - 32, y0 = Y(d.y0), y1 = Y(d.y1);\n    c.beginPath();\n    c.moveTo(X(d.x) - 4, y0); c.lineTo(x - 5, y0);\n    c.moveTo(X(d.x) - 4, y1); c.lineTo(x - 5, y1);\n    c.moveTo(x, y0); c.lineTo(x, y1); c.stroke();\n    arrow(c, x, y0, -Math.PI / 2); arrow(c, x, y1, Math.PI / 2);\n    c.save(); c.translate(x - 3, (y0 + y1) / 2); c.rotate(-Math.PI / 2);\n    c.textAlign = \"center\"; c.textBaseline = \"bottom\";\n    const tw = c.measureText(d.text).width;\n    c.fillStyle = \"rgba(255,255,255,.88)\"; c.fillRect(-tw / 2 - 3, -14, tw + 6, 13);\n    c.fillStyle = COL.dim; c.fillText(d.text, 0, -2); c.restore();\n  } else if (d.t === \"note\") {\n    const x = X(d.x), y = Y(d.y);\n    c.beginPath(); c.moveTo(x, y); c.lineTo(x + d.dx, y - d.dy); c.stroke();\n    c.beginPath(); c.arc(x, y, 2, 0, TAU); c.fill();\n    c.textAlign = d.dx \u003c 0 ? \"right\" : \"left\"; c.textBaseline = \"middle\";\n    c.fillText(d.text, x + d.dx + (d.dx \u003c 0 ? -4 : 4), y - d.dy);\n  }\n}\nfunction ruler(c, w, h) {\n  const steps = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000];\n  const st = steps.find(s => s * view.s >= 70) || 2000;\n  const px = st * view.s, x0 = 14, y = h - 16;\n  c.strokeStyle = \"#6B7683\"; c.fillStyle = \"#6B7683\"; c.lineWidth = 1.2; c.setLineDash([]);\n  c.beginPath();\n  c.moveTo(x0, y - 5); c.lineTo(x0, y); c.lineTo(x0 + px, y); c.lineTo(x0 + px, y - 5);\n  c.moveTo(x0 + px / 2, y); c.lineTo(x0 + px / 2, y - 3.5); c.stroke();\n  c.font = \"600 10px \" + MONO; c.textAlign = \"left\"; c.textBaseline = \"bottom\";\n  c.fillText(st + \" mm\", x0 + px + 6, y + 3);\n}\n\n/* ============================================================\n   Navigation dans le plan\n   ============================================================ */\nconst ptrs = new Map();\nlet pinchD = null;\nconst rel = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };\nfunction zoomAt(px, py, k) {\n  const ns = Math.max(0.002, Math.min(60, view.s * k));\n  const wx = (px - view.tx) / view.s, wy = (view.ty - py) / view.s;\n  view.s = ns; view.tx = px - wx * ns; view.ty = py + wy * ns;\n  draw();\n}\ncv.addEventListener(\"pointerdown\", e => { cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, rel(e)); pinchD = null; });\ncv.addEventListener(\"pointermove\", e => {\n  if (!ptrs.has(e.pointerId)) return;\n  const prev = ptrs.get(e.pointerId), now = rel(e);\n  ptrs.set(e.pointerId, now);\n  if (ptrs.size === 1) { view.tx += now[0] - prev[0]; view.ty += now[1] - prev[1]; draw(); }\n  else if (ptrs.size === 2) {\n    const a = Array.from(ptrs.values());\n    const d = hyp(a[0][0] - a[1][0], a[0][1] - a[1][1]);\n    if (pinchD) zoomAt((a[0][0] + a[1][0]) / 2, (a[0][1] + a[1][1]) / 2, d / pinchD);\n    pinchD = d;\n  }\n});\n[\"pointerup\", \"pointercancel\", \"pointerleave\"].forEach(ev =>\n  cv.addEventListener(ev, e => { ptrs.delete(e.pointerId); pinchD = null; }));\ncv.addEventListener(\"wheel\", e => { e.preventDefault(); const p = rel(e); zoomAt(p[0], p[1], Math.exp(-e.deltaY * 0.0016)); }, { passive: false });\n$(\"zIn\").onclick = () => zoomAt(cv.clientWidth / 2, cv.clientHeight / 2, 1.3);\n$(\"zOut\").onclick = () => zoomAt(cv.clientWidth / 2, cv.clientHeight / 2, 1 / 1.3);\n$(\"zFit\").onclick = fit;\nwindow.addEventListener(\"resize\", () => { sizeCanvas(); draw(); });\nwindow.addEventListener(\"orientationchange\", () => setTimeout(fit, 250));\n\n/* ============================================================\n   Rendu hors écran (PNG / impression)\n   ============================================================ */\nfunction renderOff(W, H) {\n  const dpr = 2, oc = document.createElement(\"canvas\");\n  oc.width = W * dpr; oc.height = H * dpr;\n  const c = oc.getContext(\"2d\");\n  c.setTransform(dpr, 0, 0, dpr, 0, 0);\n  const old = { s: view.s, tx: view.tx, ty: view.ty, ready: view.ready };\n  const m = 70, s = Math.min((W - 2 * m) / Math.max(1, dev.bb.w), (H - 2 * m) / Math.max(1, dev.bb.h));\n  view.s = s; view.tx = W / 2 - dev.bb.w / 2 * s; view.ty = H / 2 + dev.bb.h / 2 * s;\n  draw(c, W, H);\n  c.fillStyle = \"#6B7683\"; c.font = \"600 11px \" + SANS; c.textAlign = \"right\"; c.textBaseline = \"top\";\n  c.fillText(\"DÉV·CHANTIER — \" + cur.tab + \" — \" + new Date().toLocaleDateString(\"fr-FR\"), W - 14, 12);\n  view.s = old.s; view.tx = old.tx; view.ty = old.ty;\n  return oc;\n}\nfunction pageSize() {\n  const ar = Math.max(0.35, Math.min(3.2, dev.bb.w / Math.max(1, dev.bb.h)));\n  const W = 1800, H = Math.round(Math.max(700, Math.min(2200, W / ar + 200)));\n  return [W, H];\n}\nfunction save(blob, name) {\n  const url = URL.createObjectURL(blob), a = document.createElement(\"a\");\n  a.href = url; a.download = name; document.body.appendChild(a); a.click();\n  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1500);\n}\nfunction stamp() {\n  const d = new Date(), p = n => String(n).padStart(2, \"0\");\n  return cur.id + \"_\" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + \"_\" + p(d.getHours()) + p(d.getMinutes());\n}\n$(\"bPng\").onclick = () => {\n  if (!dev) return alert(\"Corrigez les cotes avant d’enregistrer.\");\n  const [W, H] = pageSize();\n  renderOff(W, H).toBlob(b => save(b, stamp() + \".png\"), \"image/png\");\n};\n$(\"bPrn\").onclick = () => {\n  if (!dev) return alert(\"Corrigez les cotes avant d’imprimer.\");\n  const img = $(\"printImg\");\n  img.src = renderOff(1500, 1060).toDataURL(\"image/png\");\n  setTimeout(() => window.print(), 150);\n};\n\n/* ============================================================\n   Export DXF (R12, unités mm)\n   ============================================================ */\nfunction buildDxf() {\n  const L = [], g = (c, v) => { L.push(String(c)); L.push(String(v)); };\n  const n = x => (Math.round(x * 10000) / 10000).toFixed(4);\n  g(0, \"SECTION\"); g(2, \"HEADER\"); g(9, \"$INSUNITS\"); g(70, 4); g(0, \"ENDSEC\");\n  g(0, \"SECTION\"); g(2, \"TABLES\"); g(0, \"TABLE\"); g(2, \"LAYER\"); g(70, 3);\n  [[\"COUPE\", 7], [\"PLI\", 1], [\"GEN\", 8]].forEach(l => {\n    g(0, \"LAYER\"); g(2, l[0]); g(70, 0); g(62, l[1]); g(6, \"CONTINUOUS\");\n  });\n  g(0, \"ENDTAB\"); g(0, \"ENDSEC\");\n  g(0, \"SECTION\"); g(2, \"ENTITIES\");\n  const poly = (pts, closed, layer) => {\n    g(0, \"POLYLINE\"); g(8, layer); g(66, 1); g(70, closed ? 1 : 0);\n    g(10, \"0.0\"); g(20, \"0.0\"); g(30, \"0.0\");\n    pts.forEach(p => { g(0, \"VERTEX\"); g(8, layer); g(10, n(p[0])); g(20, n(p[1])); g(30, \"0.0\"); });\n    g(0, \"SEQEND\"); g(8, layer);\n  };\n  dev.pieces.forEach(p => {\n    const ox = p.off[0], oy = p.off[1], T = q => [q[0] + ox, q[1] + oy];\n    p.paths.forEach(pa => {\n      if (pa.kind === \"gen\") return;\n      poly(pa.pts.map(T), pa.closed, pa.kind === \"fold\" ? \"PLI\" : \"COUPE\");\n    });\n    p.gens.forEach(gg => { if (!gg.dot) poly([T(gg.a), T(gg.b)], false, \"GEN\"); });\n  });\n  g(0, \"ENDSEC\"); g(0, \"EOF\");\n  return L.join(\"\\r\\n\");\n}\n$(\"bDxf\").onclick = () => {\n  if (!dev) return alert(\"Corrigez les cotes avant d’exporter.\");\n  save(new Blob([buildDxf()], { type: \"application/dxf\" }), stamp() + \".dxf\");\n};\n\n/* ============================================================\n   Réglages d’affichage\n   ============================================================ */\nArray.from($(\"segView\").children).forEach(b => {\n  b.onclick = () => {\n    const k = b.dataset.v, on = b.getAttribute(\"aria-pressed\") !== \"true\";\n    b.setAttribute(\"aria-pressed\", on ? \"true\" : \"false\");\n    show[k] = on; draw();\n  };\n});\nwindow.addEventListener(\"beforeprint\", () => { $(\"coordCard\").open = true; });\n$(\"mode\").onchange = compute;\n$(\"mat\").onchange = compute;\n\n/* ============================================================\n   Démarrage\n   ============================================================ */\nbuildTabs(); buildFields();\nsetTimeout(() => { sizeCanvas(); compute(); }, 30);\n\n\n/* ============================================================\n   MODÈLES 3D ET VUES 2D DE LA PIÈCE (cotes saisies telles quelles)\n   Repère : X et Y au sol, Z vers le haut.\n   ============================================================ */\nconst V2 = (nom, paths, dims) => ({ nom, paths, dims });\nconst inPoly = (pt, poly) => {\n  let c = false;\n  for (let i = 0, j = poly.length - 1; i \u003c poly.length; j = i++) {\n    const a = poly[i], b = poly[j];\n    if (((a[1] > pt[1]) !== (b[1] > pt[1])) &&\n        (pt[0] \u003c (b[0] - a[0]) * (pt[1] - a[1]) / (b[1] - a[1]) + a[0])) c = !c;\n  }\n  return c;\n};\nconst circle2 = (cx, cy, r, n) => {\n  const p = [];\n  for (let i = 0; i \u003c (n || 96); i++) { const a = TAU * i / (n || 96); p.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]); }\n  return p;\n};\nconst MODELS = {};\n\n/* ---------- tronc de cône / virole ---------- */\nMODELS.cone = v => {\n  const R1 = v.D / 2, R2 = v.d / 2, H = v.H, E = v.E || 0, n = Math.max(6, Math.round(v.nd));\n  const q = [], ed = [], b = [], t = [];\n  for (let i = 0; i \u003c= n; i++) {\n    const a = TAU * i / n;\n    b.push([R1 * Math.cos(a), R1 * Math.sin(a), 0]);\n    t.push([E + R2 * Math.cos(a), R2 * Math.sin(a), H]);\n  }\n  for (let i = 0; i \u003c n; i++) q.push([b[i], b[i + 1], t[i + 1], t[i]]);\n  ed.push(b, t);\n  const gl = [];\n  for (let i = 0; i \u003c n; i++) gl.push([b[i], t[i]]);\n  const ax = Math.max(H, v.D) * 0.06;\n  const face = [P([[-R1, 0], [R1, 0], [E + R2, H], [E - R2, H]], \"cut\", true),\n                P([[0, -ax], [0, H + ax]], \"axe\"), P([[E, -ax], [E, H + ax]], \"axe\")];\n  const dessus = [P(circle2(0, 0, R1), \"cut\", true), P(circle2(E, 0, R2), \"cut\", true),\n                  P([[-R1 - ax, 0], [R1 + ax, 0]], \"axe\"), P([[0, -R1 - ax], [0, R1 + ax]], \"axe\")];\n  const dF = [{ t: \"h\", x0: -R1, x1: R1, y: 0, text: \"Ø\" + nf(v.D) },\n              { t: \"h\", x0: E - R2, x1: E + R2, y: H, text: \"Ø\" + nf(v.d) },\n              { t: \"v\", y0: 0, y1: H, x: -R1, text: nf(H) }];\n  if (Math.abs(E) > 1e-6) dF.push({ t: \"h\", x0: 0, x1: E, y: H + Math.max(40, H * 0.12), text: \"E \" + nf(E) });\n  return { title: Math.abs(v.D - v.d) \u003c 1e-6 && !E ? \"Virole\" : (E ? \"Tronc de cône excentrique\" : \"Tronc de cône\"),\n    quads: q, edges: ed, gens: gl, nd: n,\n    views: [V2(\"Vue de face\", face, dF),\n            V2(\"Vue de dessus\", dessus, [{ t: \"h\", x0: -R1, x1: R1, y: -R1, text: \"Ø\" + nf(v.D) }])] };\n};\n\n/* ---------- coude à segments ---------- */\nMODELS.coude = v => {\n  const rho = v.D / 2, R = v.R, N = Math.max(2, Math.round(v.N)), m = N - 1;\n  const dlt = d2r(v.A) / m, n = Math.max(8, 2 * Math.round(v.nd / 2));\n  const dir = th => [-Math.sin(th), 0, Math.cos(th)];\n  const rad = th => [Math.cos(th), 0, Math.sin(th)];\n  const nrm = a => { const L = hyp(a[0], a[1], a[2]); return [a[0] / L, a[1] / L, a[2] / L]; };\n  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];\n  const els = [];\n  let Pa = [R, 0, 0];\n  for (let k = 0; k \u003c= m; k++) {\n    const u = dir(k * dlt), e1 = rad(k * dlt);\n    const L = (k === 0 || k === m) ? R * Math.tan(dlt / 2) : 2 * R * Math.tan(dlt / 2);\n    const na = k === 0 ? u : nrm(dir((k - 1) * dlt).map((x, i) => x + u[i]));\n    const nb = k === m ? u : nrm(dir((k + 1) * dlt).map((x, i) => x + u[i]));\n    els.push({ Pa: Pa.slice(), u, e1, L, na, nb, half: k === 0 || k === m });\n    Pa = [Pa[0] + L * u[0], Pa[1] + L * u[1], Pa[2] + L * u[2]];\n  }\n  const q = [], ed = [], ext = [], intr = [], joints = [], gl = [];\n  els.forEach((el, k) => {\n    const pt = (al, end) => {\n      const cs = Math.cos(al), sn = Math.sin(al);\n      const nn = end ? el.nb : el.na, base = end ? el.L : 0;\n      const t = base - rho * cs * dot(el.e1, nn) / dot(el.u, nn);\n      return [el.Pa[0] + t * el.u[0] + rho * cs * el.e1[0],\n              el.Pa[1] + rho * sn,\n              el.Pa[2] + t * el.u[2] + rho * cs * el.e1[2]];\n    };\n    const A = [], B = [];\n    for (let i = 0; i \u003c= n; i++) { const al = TAU * i / n; A.push(pt(al, false)); B.push(pt(al, true)); }\n    for (let i = 0; i \u003c n; i++) { q.push([A[i], A[i + 1], B[i + 1], B[i]]); gl.push([A[i], B[i]]); }\n    ed.push(A); if (k === els.length - 1) ed.push(B);\n    ext.push([A[0][0], A[0][2]], [B[0][0], B[0][2]]);\n    intr.push([A[n / 2][0], A[n / 2][2]], [B[n / 2][0], B[n / 2][2]]);\n    joints.push([[A[0][0], A[0][2]], [A[n / 2][0], A[n / 2][2]]]);\n    if (k === els.length - 1) joints.push([[B[0][0], B[0][2]], [B[n / 2][0], B[n / 2][2]]]);\n  });\n  const arc = [];\n  for (let i = 0; i \u003c= 64; i++) { const a = d2r(v.A) * i / 64; arc.push([R * Math.cos(a), R * Math.sin(a)]); }\n  const face = [P(ext, \"cut\"), P(intr, \"cut\"), P(arc, \"axe\")].concat(joints.map(j => P(j, \"pli\")));\n  const bb = bboxOf([P(ext.concat(intr))]);\n  const dessus = [P([[bb.x0, -rho], [bb.x1, -rho], [bb.x1, rho], [bb.x0, rho]], \"cut\", true),\n                  P([[bb.x0 - 18, 0], [bb.x1 + 18, 0]], \"axe\")];\n  return { title: \"Coude \" + nf(v.A, 0) + \"° à \" + N + \" éléments\", quads: q, edges: ed, gens: gl, nd: n,\n    views: [V2(\"Vue de face\", face, [\n      { t: \"h\", x0: bb.x0, x1: bb.x1, y: bb.y0, text: nf(bb.w) },\n      { t: \"v\", y0: bb.y0, y1: bb.y1, x: bb.x0, text: nf(bb.h) },\n      { t: \"note\", x: R * Math.cos(d2r(v.A) / 2), y: R * Math.sin(d2r(v.A) / 2), dx: 34, dy: 26, text: \"R \" + nf(R) },\n      { t: \"note\", x: 0, y: 0, dx: 40, dy: 30, text: nf(v.A, 0) + \"°\" }]),\n      V2(\"Vue de dessus\", dessus, [{ t: \"v\", y0: -rho, y1: rho, x: bb.x0, text: \"Ø\" + nf(v.D) }])] };\n};\n\n/* ---------- piquage cylindre / cylindre ---------- */\nMODELS.piquage = v => {\n  const R = v.D / 2, r = v.d / 2, th = d2r(v.ang), E = v.E || 0, L = v.L, n = Math.max(8, Math.round(v.nd));\n  const tAt = a => {\n    const yv = E + r * Math.sin(a), z = Math.sqrt(Math.max(0, R * R - yv * yv));\n    return (z - r * Math.cos(a) * Math.cos(th)) / Math.sin(th);\n  };\n  const br = (a, t) => [t * Math.cos(th) - r * Math.cos(a) * Math.sin(th),\n                        E + r * Math.sin(a),\n                        t * Math.sin(th) + r * Math.cos(a) * Math.cos(th)];\n  const inter = [], holePar = [], endC = [];\n  for (let i = 0; i \u003c= n; i++) {\n    const a = TAU * i / n, t = tAt(a), p = br(a, t);\n    inter.push(p); endC.push(br(a, L));\n    holePar.push([p[0], R * Math.atan2(p[1], Math.sqrt(Math.max(0, R * R - p[1] * p[1])))]);\n  }\n  const bh = bboxOf([P(holePar, \"cut\", true)]);\n  const Lp = Math.max(1.6 * v.D, bh.w * 1.8), xc = (bh.x0 + bh.x1) / 2;\n  const q = [], ed = [];\n  /* bord du trou : deux branches monotones en ψ, pour découper le tube exactement */\n  const NF = 240, hx = [], hp = [];\n  for (let i = 0; i \u003c NF; i++) {\n    const a = TAU * i / NF, pz = br(a, tAt(a));\n    hx.push(pz[0]);\n    hp.push(Math.atan2(pz[1], Math.sqrt(Math.max(0, R * R - pz[1] * pz[1]))));\n  }\n  let iMx = 0, iMn = 0;\n  hp.forEach((val, i) => { if (val > hp[iMx]) iMx = i; if (val \u003c hp[iMn]) iMn = i; });\n  const walk = (a, b) => { const o = []; let i = a;\n    for (;;) { o.push([hp[i], hx[i]]); if (i === b) break; i = (i + 1) % NF; }\n    return o.sort((m, n) => m[0] - n[0]); };\n  const B1 = walk(iMn, iMx), B2 = walk(iMx, iMn);\n  const itp = (arr, ps) => {\n    if (ps \u003c= arr[0][0]) return arr[0][1];\n    if (ps >= arr[arr.length - 1][0]) return arr[arr.length - 1][1];\n    let lo = 0, hi = arr.length - 1;\n    while (hi - lo > 1) { const md = (lo + hi) >> 1; if (arr[md][0] \u003c= ps) lo = md; else hi = md; }\n    const t = (ps - arr[lo][0]) / (arr[hi][0] - arr[lo][0] || 1);\n    return arr[lo][1] + t * (arr[hi][1] - arr[lo][1]);\n  };\n  const psMin = hp[iMn], psMax = hp[iMx];\n  const pp = (x, a) => [x, R * Math.sin(a), R * Math.cos(a)];\n  const cuts = [];\n  for (let i = 0; i \u003c= 96; i++) cuts.push(-Math.PI + TAU * i / 96);\n  for (let i = 0; i \u003c= 72; i++) {\n    const al = -Math.PI / 2 + Math.PI * i / 72, yv = E + r * Math.sin(al);\n    cuts.push(Math.atan2(yv, Math.sqrt(Math.max(0, R * R - yv * yv))));\n  }\n  cuts.sort((a, b) => a - b);\n  const strip = (a0, a1, x0, x1) => {\n    const N = 3;\n    for (let j = 0; j \u003c N; j++) {\n      const u0 = j / N, u1 = (j + 1) / N;\n      q.push([pp(x0[0] + (x1[0] - x0[0]) * u0, a0), pp(x0[0] + (x1[0] - x0[0]) * u1, a0),\n              pp(x0[1] + (x1[1] - x0[1]) * u1, a1), pp(x0[1] + (x1[1] - x0[1]) * u0, a1)]);\n    }\n  };\n  for (let i = 0; i \u003c cuts.length - 1; i++) {\n    const a0 = cuts[i], a1 = cuts[i + 1], am = (a0 + a1) / 2;\n    if (a1 - a0 \u003c 1e-9) continue;\n    if (am \u003c psMin || am > psMax) { strip(a0, a1, [xc - Lp / 2, xc - Lp / 2], [xc + Lp / 2, xc + Lp / 2]); continue; }\n    const l0 = Math.min(itp(B1, a0), itp(B2, a0)), r0 = Math.max(itp(B1, a0), itp(B2, a0));\n    const l1 = Math.min(itp(B1, a1), itp(B2, a1)), r1 = Math.max(itp(B1, a1), itp(B2, a1));\n    strip(a0, a1, [xc - Lp / 2, xc - Lp / 2], [l0, l1]);\n    strip(a0, a1, [r0, r1], [xc + Lp / 2, xc + Lp / 2]);\n  }\n  const gl = [];\n  for (let i = 0; i \u003c n; i++) { q.push([inter[i], inter[i + 1], endC[i + 1], endC[i]]); gl.push([inter[i], endC[i]]); }\n  const c1 = [], c2 = [], NC = 96;\n  for (let i = 0; i \u003c= NC; i++) {\n    const a = -Math.PI + TAU * i / NC;\n    c1.push([xc - Lp / 2, R * Math.sin(a), R * Math.cos(a)]);\n    c2.push([xc + Lp / 2, R * Math.sin(a), R * Math.cos(a)]);\n  }\n  ed.push(inter, endC, c1, c2);\n  const u = [Math.cos(th), Math.sin(th)], pn = [-u[1], u[0]];\n  const face = [\n    P([[xc - Lp / 2, -R], [xc + Lp / 2, -R], [xc + Lp / 2, R], [xc - Lp / 2, R]], \"cut\", true),\n    P([[r * pn[0], r * pn[1]], [L * u[0] + r * pn[0], L * u[1] + r * pn[1]]], \"cut\"),\n    P([[-r * pn[0], -r * pn[1]], [L * u[0] - r * pn[0], L * u[1] - r * pn[1]]], \"cut\"),\n    P([[L * u[0] + r * pn[0], L * u[1] + r * pn[1]], [L * u[0] - r * pn[0], L * u[1] - r * pn[1]]], \"cut\"),\n    P(inter.map(p => [p[0], p[2]]), \"pli\", true),\n    P([[xc - Lp / 2 - 16, 0], [xc + Lp / 2 + 16, 0]], \"axe\"),\n    P([[0, 0], [(L + 20) * u[0], (L + 20) * u[1]]], \"axe\")];\n  const dessus = [\n    P([[xc - Lp / 2, -R], [xc + Lp / 2, -R], [xc + Lp / 2, R], [xc - Lp / 2, R]], \"cut\", true),\n    P(inter.map(p => [p[0], p[1]]), \"pli\", true),\n    P([[0, E - r], [L * Math.cos(th), E - r]], \"cut\"),\n    P([[0, E + r], [L * Math.cos(th), E + r]], \"cut\"),\n    P([[xc - Lp / 2 - 16, 0], [xc + Lp / 2 + 16, 0]], \"axe\")];\n  const dF = [{ t: \"v\", y0: -R, y1: R, x: xc - Lp / 2, text: \"Ø\" + nf(v.D) },\n              { t: \"note\", x: L * u[0], y: L * u[1], dx: 26, dy: 26, text: \"Ø\" + nf(v.d) },\n              { t: \"note\", x: L * u[0] / 2, y: L * u[1] / 2, dx: 30, dy: -30, text: \"L \" + nf(L) }];\n  if (v.ang \u003c 89.9) dF.push({ t: \"note\", x: 0, y: 0, dx: 46, dy: 22, text: nf(v.ang, 0) + \"°\" });\n  const dD = [{ t: \"v\", y0: E - r, y1: E + r, x: L * Math.cos(th), text: \"Ø\" + nf(v.d) }];\n  if (Math.abs(E) > 1e-6) dD.push({ t: \"v\", y0: 0, y1: E, x: xc - Lp / 2 + 30, text: \"E \" + nf(E) });\n  return { title: \"Piquage Ø\" + nf(v.d, 0) + \" sur Ø\" + nf(v.D, 0) + \" à \" + nf(v.ang, 0) + \"°\",\n    quads: q, edges: ed, gens: gl, nd: n, views: [V2(\"Vue de face\", face, dF), V2(\"Vue de dessus\", dessus, dD)] };\n};\n\n/* ---------- transition carré / rond ---------- */\nMODELS.cr = v => {\n  const a = v.a, b = v.b, rr = v.d / 2, H = v.H, dx = v.dx || 0, dy = v.dy || 0;\n  const per = Math.max(2, Math.round(v.nd / 4)), TOT = per * 4, q = [], ed = [], gl = [];\n  const K = [[a / 2, b / 2, 0], [-a / 2, b / 2, 0], [-a / 2, -b / 2, 0], [a / 2, -b / 2, 0]];\n  const A = [];\n  for (let i = 0; i \u003c= TOT; i++) { const t = TAU * i / TOT; A.push([dx + rr * Math.cos(t), dy + rr * Math.sin(t), H]); }\n  for (let c = 0; c \u003c 4; c++) {\n    for (let i = c * per; i \u003c (c + 1) * per; i++) { q.push([K[c], A[i], A[i + 1], A[i + 1]]); if (i > c * per) gl.push([K[c], A[i]]); }\n    q.push([K[c], A[(c + 1) * per], K[(c + 1) % 4], K[(c + 1) % 4]]);\n  }\n  ed.push([K[0], K[1], K[2], K[3], K[0]], A);\n  for (let c = 0; c \u003c 4; c++) { ed.push([K[c], A[c * per]]); ed.push([K[c], A[(c + 1) * per]]); }\n  const mkV = (w, off) => [P([[-w / 2, 0], [w / 2, 0], [off + rr, H], [off - rr, H]], \"cut\", true),\n                           P([[0, -H * 0.07], [0, H * 1.07]], \"axe\")];\n  const dessus = [P([[-a / 2, -b / 2], [a / 2, -b / 2], [a / 2, b / 2], [-a / 2, b / 2]], \"cut\", true),\n                  P(circle2(dx, dy, rr), \"cut\", true)];\n  for (let c = 0; c \u003c 4; c++) {\n    dessus.push(P([[K[c][0], K[c][1]], [A[c * per][0], A[c * per][1]]], \"pli\"));\n    dessus.push(P([[K[c][0], K[c][1]], [A[(c + 1) * per][0], A[(c + 1) * per][1]]], \"pli\"));\n  }\n  return { title: \"Transition \" + nf(a, 0) + \"×\" + nf(b, 0) + \" → Ø\" + nf(v.d, 0),\n    quads: q, edges: ed, gens: gl, nd: TOT, views: [\n      V2(\"Vue de face\", mkV(a, dx), [{ t: \"h\", x0: -a / 2, x1: a / 2, y: 0, text: nf(a) },\n        { t: \"h\", x0: dx - rr, x1: dx + rr, y: H, text: \"Ø\" + nf(v.d) },\n        { t: \"v\", y0: 0, y1: H, x: -a / 2, text: nf(H) }]),\n      V2(\"Vue de côté\", mkV(b, dy), [{ t: \"h\", x0: -b / 2, x1: b / 2, y: 0, text: nf(b) },\n        { t: \"v\", y0: 0, y1: H, x: -b / 2, text: nf(H) }]),\n      V2(\"Vue de dessus\", dessus, [{ t: \"h\", x0: -a / 2, x1: a / 2, y: -b / 2, text: nf(a) },\n        { t: \"v\", y0: -b / 2, y1: b / 2, x: -a / 2, text: nf(b) }])] };\n};\n\nfunction buildModel() {\n  const v = Object.assign({}, store[cur.id]);\n  try { return MODELS[cur.id](v); } catch (e) { return null; }\n}\n\n/* ============================================================\n   FENÊTRE DE VISUALISATION (2 vues + 3D)\n   ============================================================ */\nfunction Viewer(doc, root, onClose) {\n  root.className = (root.className ? root.className + \" \" : \"\") + \"dcv\";\n  if (!doc.getElementById(\"dcv-style\")) {\n    const st = doc.createElement(\"style\");\n    st.id = \"dcv-style\";\n    st.textContent = `\n    .dcv{background:#E6EAEF;font-family:${SANS};display:flex;flex-direction:column;height:100%;min-height:0}\n    .dcv .vh{background:#282456;color:#fff;display:flex;align-items:center;gap:10px;padding:9px 12px;flex:0 0 auto}\n    .dcv .vh b{font-size:13px;letter-spacing:.05em;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n    .dcv .vt{display:flex;background:rgba(255,255,255,.13);border-radius:7px;padding:2px}\n    .dcv .vt button{appearance:none;border:0;background:transparent;color:rgba(255,255,255,.7);\n      font:600 12px ${SANS};padding:6px 12px;border-radius:5px;cursor:pointer}\n    .dcv .vt button[aria-pressed=\"true\"]{background:#E8B33A;color:#282456}\n    .dcv .vx{appearance:none;border:0;background:transparent;color:#fff;font-size:22px;\n      line-height:1;cursor:pointer;padding:0 6px;opacity:.75}\n    .dcv .vc{position:relative;flex:1 1 auto;min-height:0}\n    .dcv canvas{display:block;width:100%;height:100%;touch-action:none}\n    .dcv .vf{display:flex;gap:6px;padding:8px 12px;background:#fff;border-top:1px solid #CBD3DC;\n      overflow-x:auto;flex:0 0 auto}\n    .dcv .vf button{appearance:none;border:1px solid #CBD3DC;background:#fff;border-radius:7px;\n      padding:7px 12px;font:600 12px ${SANS};color:#10141A;cursor:pointer;white-space:nowrap}\n    .dcv .vf button:active{background:#EEF1F5}\n    .dcv .vn{position:absolute;left:12px;bottom:10px;font:600 11px ${MONO};color:#6B7683}`;\n    doc.head.appendChild(st);\n  }\n\n  const h = doc.createElement(\"div\"); h.className = \"vh\";\n  const ttl = doc.createElement(\"b\"); ttl.textContent = \"—\";\n  const tabs = doc.createElement(\"div\"); tabs.className = \"vt\";\n  const bt2 = doc.createElement(\"button\"); bt2.textContent = \"2 vues\";\n  const bt3 = doc.createElement(\"button\"); bt3.textContent = \"3D\";\n  tabs.appendChild(bt2); tabs.appendChild(bt3);\n  h.appendChild(ttl); h.appendChild(tabs);\n  if (onClose) { const x = doc.createElement(\"button\"); x.className = \"vx\"; x.innerHTML = \"&times;\"; x.onclick = onClose; h.appendChild(x); }\n  const wrap = doc.createElement(\"div\"); wrap.className = \"vc\";\n  const cvv = doc.createElement(\"canvas\"); wrap.appendChild(cvv);\n  const nfo = doc.createElement(\"div\"); nfo.className = \"vn\"; wrap.appendChild(nfo);\n  const ft = doc.createElement(\"div\"); ft.className = \"vf\";\n  root.appendChild(h); root.appendChild(wrap); root.appendChild(ft);\n\n  const cc = cvv.getContext(\"2d\");\n  let M = null, tab = \"3d\";\n  const cam = { yaw: -0.62, pitch: 0.36, s: 1, cx: 0, cy: 0, fit: true };\n  const mkb = (t, f) => { const b = doc.createElement(\"button\"); b.textContent = t; b.onclick = f; ft.appendChild(b); return b; };\n  mkb(\"Iso\", () => { cam.yaw = -0.62; cam.pitch = 0.36; cam.fit = true; paint(); });\n  mkb(\"Face\", () => { cam.yaw = 0; cam.pitch = 0; cam.fit = true; paint(); });\n  mkb(\"Dessus\", () => { cam.yaw = 0; cam.pitch = Math.PI / 2 - 1e-3; cam.fit = true; paint(); });\n  mkb(\"Ajuster\", () => { cam.fit = true; paint(); });\n\n  function size() {\n    const dpr = Math.min(3, (doc.defaultView || window).devicePixelRatio || 1);\n    const w = cvv.clientWidth, hh = cvv.clientHeight;\n    cvv.width = Math.round(w * dpr); cvv.height = Math.round(hh * dpr);\n    cc.setTransform(dpr, 0, 0, dpr, 0, 0);\n    return [w, hh];\n  }\n  /* --- projection --- */\n  function pr(p) {\n    const cg = Math.cos(cam.yaw), sg = Math.sin(cam.yaw), cb = Math.cos(cam.pitch), sb = Math.sin(cam.pitch);\n    const x1 = p[0] * cg - p[1] * sg, y1 = p[0] * sg + p[1] * cg;\n    return [x1, y1 * sb + p[2] * cb, y1 * cb - p[2] * sb];\n  }\n  function paint() {\n    const [w, hh] = size();\n    cc.fillStyle = \"#F3F5F8\"; cc.fillRect(0, 0, w, hh);\n    if (!M) { cc.fillStyle = \"#6B7683\"; cc.font = \"13px \" + SANS; cc.textAlign = \"center\";\n      cc.fillText(\"Corrigez les cotes pour afficher la pièce.\", w / 2, hh / 2); return; }\n    ttl.textContent = M.title;\n    bt2.setAttribute(\"aria-pressed\", tab === \"2d\" ? \"true\" : \"false\");\n    bt3.setAttribute(\"aria-pressed\", tab === \"3d\" ? \"true\" : \"false\");\n    ft.style.display = tab === \"3d\" ? \"flex\" : \"none\";\n    tab === \"3d\" ? paint3(w, hh) : paint2(w, hh);\n  }\n\n  /* --- 3D --- */\n  function paint3(w, hh) {\n    nfo.textContent = (M.nd ? M.nd + \" génératrices · \" : \"\") + \"Glisser pour tourner · pincer pour zoomer\";\n    const items = [];\n    let x0 = 1e18, x1 = -1e18, y0 = 1e18, y1 = -1e18, dmin = 1e18, dmax = -1e18;\n    const PJ = [];\n    const push = p => { const q = pr(p);\n      if (q[0] \u003c x0) x0 = q[0]; if (q[0] > x1) x1 = q[0];\n      if (q[1] \u003c y0) y0 = q[1]; if (q[1] > y1) y1 = q[1];\n      if (q[2] \u003c dmin) dmin = q[2]; if (q[2] > dmax) dmax = q[2]; return q; };\n    M.quads.forEach(f => {\n      const P3 = f.map(push);\n      let d = 0; P3.forEach(p => d += p[2]); d /= P3.length;\n      const u = [f[1][0] - f[0][0], f[1][1] - f[0][1], f[1][2] - f[0][2]];\n      const wv = [f[2][0] - f[0][0], f[2][1] - f[0][1], f[2][2] - f[0][2]];\n      let n = [u[1] * wv[2] - u[2] * wv[1], u[2] * wv[0] - u[0] * wv[2], u[0] * wv[1] - u[1] * wv[0]];\n      const nl = hyp(n[0], n[1], n[2]) || 1; n = [n[0] / nl, n[1] / nl, n[2] / nl];\n      const nc = pr(n), L = [0.28, 0.56, -0.78];\n      const sh = 0.30 + 0.70 * Math.abs(nc[0] * L[0] + nc[1] * L[1] + nc[2] * L[2]);\n      items.push({ t: \"f\", p: P3, d, c: \"rgb(\" + Math.round(126 * sh + 62) + \",\" + Math.round(140 * sh + 66) + \",\" + Math.round(156 * sh + 72) + \")\" });\n    });\n    M.edges.forEach(pl => {\n      for (let i = 1; i \u003c pl.length; i++) {\n        const A = push(pl[i - 1]), B = push(pl[i]);\n        items.push({ t: \"e\", a: A, b: B, d: (A[2] + B[2]) / 2 });\n      }\n    });\n    (M.gens || []).forEach(pl => {\n      const A = push(pl[0]), B = push(pl[1]);\n      items.push({ t: \"g\", a: A, b: B, d: (A[2] + B[2]) / 2 });\n    });\n    const bias = (dmax - dmin) * 0.012 + 1e-6;\n    items.forEach(it => { if (it.t !== \"f\") it.d -= bias; });\n    if (cam.fit) {\n      const m = 44;\n      cam.s = Math.min((w - 2 * m) / Math.max(1, x1 - x0), (hh - 2 * m) / Math.max(1, y1 - y0));\n      cam.cx = w / 2 - (x0 + x1) / 2 * cam.s; cam.cy = hh / 2 + (y0 + y1) / 2 * cam.s;\n      cam.fit = false;\n    }\n    const SXc = x => x * cam.s + cam.cx, SYc = y => cam.cy - y * cam.s;\n    items.sort((a, b) => b.d - a.d);\n    items.forEach(it => {\n      if (it.t === \"f\") {\n        cc.beginPath();\n        it.p.forEach((q, i) => { i ? cc.lineTo(SXc(q[0]), SYc(q[1])) : cc.moveTo(SXc(q[0]), SYc(q[1])); });\n        cc.closePath(); cc.fillStyle = it.c; cc.fill();\n        cc.strokeStyle = it.c; cc.lineWidth = 1; cc.stroke();\n      } else {\n        cc.beginPath(); cc.moveTo(SXc(it.a[0]), SYc(it.a[1])); cc.lineTo(SXc(it.b[0]), SYc(it.b[1]));\n        if (it.t === \"g\") { cc.strokeStyle = \"rgba(16,20,26,.38)\"; cc.lineWidth = 0.9; }\n        else { cc.strokeStyle = \"#10141A\"; cc.lineWidth = 1.5; }\n        cc.stroke();\n      }\n    });\n  }\n\n  /* --- 2 vues cotées --- */\n  function paint2(w, hh) {\n    nfo.textContent = \"Cotes telles que saisies\";\n    const vs = M.views, gap = 46, lab = 30;\n    const bbs = vs.map(v => bboxOf(v.paths.filter(p => p.kind !== \"axe\")));\n    const m = 62;\n    const totW = bbs.reduce((a, b) => a + b.w, 0), maxH = Math.max.apply(null, bbs.map(b => b.h));\n    const s = Math.min((w - 2 * m - gap * (vs.length - 1)) / Math.max(1, totW), (hh - 2 * m - lab) / Math.max(1, maxH));\n    let px = m;\n    vs.forEach((v, i) => {\n      const bb = bbs[i];\n      const ox = px - bb.x0 * s, oy = hh - m - (-bb.y0) * s;\n      const X = x => ox + x * s, Y = y => oy - y * s;\n      v.paths.forEach(pa => {\n        cc.beginPath();\n        pa.pts.forEach((q, k) => { k ? cc.lineTo(X(q[0]), Y(q[1])) : cc.moveTo(X(q[0]), Y(q[1])); });\n        if (pa.closed) cc.closePath();\n        if (pa.kind === \"axe\") { cc.strokeStyle = \"#8E9AA8\"; cc.lineWidth = 1; cc.setLineDash([9, 3, 2, 3]); }\n        else if (pa.kind === \"pli\") { cc.strokeStyle = \"#C8452D\"; cc.lineWidth = 1.3; cc.setLineDash([6, 4]); }\n        else { cc.strokeStyle = \"#10141A\"; cc.lineWidth = 1.9; cc.setLineDash([]); }\n        cc.stroke(); cc.setLineDash([]);\n      });\n      (v.dims || []).forEach(d => dimDraw(cc, d, X, Y));\n      cc.fillStyle = \"#6B7683\"; cc.font = \"700 10px \" + SANS;\n      cc.textAlign = \"center\"; cc.textBaseline = \"top\";\n      cc.fillText(v.nom.toUpperCase(), X(bb.x0 + bb.w / 2), hh - m + 18);\n      px += bb.w * s + gap;\n    });\n  }\n\n  /* --- orbite --- */\n  const pv = new Map(); let pd = null;\n  const rl = e => { const r = cvv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };\n  cvv.addEventListener(\"pointerdown\", e => { cvv.setPointerCapture(e.pointerId); pv.set(e.pointerId, rl(e)); pd = null; });\n  cvv.addEventListener(\"pointermove\", e => {\n    if (!pv.has(e.pointerId)) return;\n    const a = pv.get(e.pointerId), b = rl(e); pv.set(e.pointerId, b);\n    if (pv.size === 1) {\n      if (tab !== \"3d\") return;\n      cam.yaw += (b[0] - a[0]) * 0.009;\n      cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch + (b[1] - a[1]) * 0.009));\n      paint();\n    } else if (pv.size === 2) {\n      const q = Array.from(pv.values()), d = hyp(q[0][0] - q[1][0], q[0][1] - q[1][1]);\n      if (pd && tab === \"3d\") { cam.s *= d / pd; paint(); }\n      pd = d;\n    }\n  });\n  [\"pointerup\", \"pointercancel\", \"pointerleave\"].forEach(ev =>\n    cvv.addEventListener(ev, e => { pv.delete(e.pointerId); pd = null; }));\n  cvv.addEventListener(\"wheel\", e => {\n    e.preventDefault(); if (tab !== \"3d\") return;\n    cam.s *= Math.exp(-e.deltaY * 0.0016); paint();\n  }, { passive: false });\n  bt2.onclick = () => { tab = \"2d\"; paint(); };\n  bt3.onclick = () => { tab = \"3d\"; cam.fit = true; paint(); };\n  (doc.defaultView || window).addEventListener(\"resize\", () => { cam.fit = true; paint(); });\n\n  return { set(m) { const first = !M; M = m; if (first) cam.fit = true; paint(); }, paint };\n}\n\n/* ---------- ouverture ---------- */\nvar VW = null, VWIN = null, VOV = null;\nfunction pushModel() {\n  if (!VW) return;\n  if (VWIN && VWIN.closed) { VW = null; VWIN = null; return; }\n  try { VW.set(buildModel()); } catch (e) { VW = null; }\n}\nfunction closeOverlay() { if (VOV) { VOV.remove(); VOV = null; VW = null; } }\nfunction openViewer() {\n  if (VWIN && !VWIN.closed) { VWIN.focus(); pushModel(); return; }\n  let w = null;\n  if (window.parent === window) {\n    try { w = window.open(\"\", \"devchantier_vue\", \"width=980,height=740\"); } catch (e) { w = null; }\n  }\n  if (w && w.document) {\n    VWIN = w;\n    w.document.open();\n    w.document.write('\u003c!DOCTYPE html>\u003chtml lang=\"fr\">\u003chead>\u003cmeta charset=\"utf-8\">' +\n      '\u003cmeta name=\"viewport\" content=\"width=device-width,initial-scale=1\">' +\n      \"\u003ctitle>DÉV·CHANTIER — la pièce\u003c/title>\u003c/head>\u003cbody>\u003c/body>\u003c/html>\");\n    w.document.close();\n    w.document.documentElement.style.height = \"100%\";\n    w.document.body.style.cssText = \"margin:0;height:100%;overflow:hidden\";\n    VW = Viewer(w.document, w.document.body, null);\n    pushModel();\n    return;\n  }\n  /* fenêtre bloquée (iPhone en mode application) : panneau plein écran */\n  closeOverlay();\n  VOV = document.createElement(\"div\");\n  VOV.style.cssText = \"position:fixed;inset:0;z-index:200\";\n  document.body.appendChild(VOV);\n  VW = Viewer(document, VOV, closeOverlay);\n  pushModel();\n}\n\n$(\"bVue\").onclick = openViewer;\n\u003c/script>\n\u003cscript>(function(){if(window.parent===window)return;var b=document.getElementById(\"isoDevClose\");if(!b)return;b.style.display=\"block\";b.onclick=function(){window.parent.postMessage(\"iso-dev-close\",\"*\");};})();\u003c/script>\n\u003c/body>\n\u003c/html>\n";
+// ---- Barre des modes : pictogrammes au trait (d'après Tabler Icons, MIT) ----
+const MODE_ICON_PATHS = {
+    draw: ["M3 19a2 2 0 1 0 4 0a2 2 0 0 0 -4 0", "M19 7a2 2 0 1 0 0 -4a2 2 0 0 0 0 4z", "M11 19h5.5a3.5 3.5 0 0 0 0 -7h-8a3.5 3.5 0 0 1 0 -7h4.5"],
+    add: ["M12 3l8 4.5l0 9l-8 4.5l-8 -4.5l0 -9l8 -4.5", "M12 12l8 -4.5", "M12 12l0 9", "M12 12l-8 -4.5", "M16 5.25l-8 4.5"],
+    select: ["M3 12l3 0", "M12 3l0 3", "M7.8 7.8l-2.2 -2.2", "M16.2 7.8l2.2 -2.2", "M7.8 16.2l-2.2 2.2", "M12 12l9 3l-4 2l-2 4l-3 -9"],
+    cote: ["M4 12v-6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v6", "M10 18h-7", "M21 18h-7", "M6 15l-3 3l3 3", "M18 15l3 3l-3 3"],
+};
+const ModeIcon = ({ name, size }) => React.createElement("svg", { width: size || 22, height: size || 22, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", style: { display: "block" } },
+    (MODE_ICON_PATHS[name] || []).map((d, i) => React.createElement("path", { key: i, d: d })));
+// ---- Menus déroulants style iOS (Outils / Réglage) ----
+// Ouverture « ressort » depuis le bouton (coin haut-droit), fermeture en
+// fondu rétréci — mêmes courbes que les menus contextuels d'iOS.
+(() => {
+    if (typeof document === "undefined" || document.getElementById("ios-menu-css"))
+        return;
+    const st = document.createElement("style");
+    st.id = "ios-menu-css";
+    st.textContent = `
+@keyframes iosMenuIn { 0% { opacity: 0; transform: scale(0.25); } 45% { opacity: 1; } 100% { opacity: 1; transform: scale(1); } }
+@keyframes iosMenuOut { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(0.55); } }
+@keyframes iosDimIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes iosDimOut { from { opacity: 1; } to { opacity: 0; } }
+.ios-menu { transform-origin: top right; animation: iosMenuIn 0.38s cubic-bezier(0.18, 1.25, 0.4, 1) both; }
+.ios-menu.up { transform-origin: var(--ox, 50%) 100%; }
+.ios-menu.down { transform-origin: var(--ox, 0px) 0%; }
+.ios-menu.closing { animation: iosMenuOut 0.17s cubic-bezier(0.4, 0, 1, 1) both; }
+.ios-dim { animation: iosDimIn 0.25s ease-out both; }
+.ios-dim.closing { animation: iosDimOut 0.17s ease-in both; }
+.ios-menu button.ios-item:active { background: rgba(60,60,67,0.12) !important; }
+.ios-menu .ios-sub { animation: iosDimIn 0.2s ease-out both; }
+`;
+    document.head.appendChild(st);
+})();
+// ---- Enregistrement de fichiers (PNG, plans .json) ----
+// Sur iPhone / iPad (surtout en appli écran d'accueil), un lien
+// <a download> ne fait rien : on passe par la feuille de partage iOS
+// (Enregistrer l'image / Enregistrer dans Fichiers). Ailleurs : téléchargement.
+const IS_APPLE_TOUCH = typeof navigator !== "undefined" && (/iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+const dataUrlToBlob = (du) => {
+    const i = du.indexOf(",");
+    const mime = (du.slice(0, i).match(/:(.*?);/) || [])[1] || "application/octet-stream";
+    const bin = atob(du.slice(i + 1));
+    const u8 = new Uint8Array(bin.length);
+    for (let k = 0; k < bin.length; k++)
+        u8[k] = bin.charCodeAt(k);
+    return new Blob([u8], { type: mime });
+};
+const showImageSaveOverlay = (dataUrl) => {
+    const ov = document.createElement("div");
+    ov.style.cssText = "position:fixed;inset:0;z-index:999999;background:rgba(20,25,32,0.92);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:calc(56px + env(safe-area-inset-top)) 12px calc(20px + env(safe-area-inset-bottom));box-sizing:border-box;";
+    const img = document.createElement("img");
+    img.src = dataUrl;
+    img.style.cssText = "max-width:100%;max-height:78vh;background:#fff;border-radius:6px;-webkit-touch-callout:default;";
+    const tip = document.createElement("div");
+    tip.textContent = "Appui long sur l'image \u2192 \u00AB Enregistrer dans Photos \u00BB";
+    tip.style.cssText = "color:#fff;font:600 14px -apple-system,sans-serif;text-align:center;";
+    const close = document.createElement("button");
+    close.textContent = "\u2715 Fermer";
+    close.style.cssText = "position:fixed;top:calc(12px + env(safe-area-inset-top));right:12px;padding:10px 16px;border-radius:999px;border:none;background:#282456;color:#fff;font:700 14px sans-serif;";
+    close.onclick = () => ov.remove();
+    ov.appendChild(img);
+    ov.appendChild(tip);
+    ov.appendChild(close);
+    document.body.appendChild(ov);
+};
+const saveBlobFile = (blob, name, previewDataUrl) => {
+    const download = () => {
+        if (IS_APPLE_TOUCH && previewDataUrl) {
+            showImageSaveOverlay(previewDataUrl);
+            return;
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = name;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // ne pas révoquer tout de suite : Safari lit l'URL après le clic
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+    };
+    let file = null;
+    try {
+        file = new File([blob], name, { type: blob.type });
+    }
+    catch (e) { }
+    let canShare = false;
+    try {
+        canShare = !!(IS_APPLE_TOUCH && file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] }));
+    }
+    catch (e) { }
+    if (canShare) {
+        navigator.share({ files: [file], title: name }).catch((err) => {
+            if (err && err.name === "AbortError")
+                return; // partage annulé par l'utilisateur
+            download();
+        });
+        return;
+    }
+    download();
+};
+// ---- Plans enregistrés sur l'appareil ----
+const PLANS_KEY = "isoChantier.plans.v1";
+const loadStoredPlans = () => {
+    try {
+        const v = window.localStorage.getItem(PLANS_KEY);
+        const arr = v ? JSON.parse(v) : [];
+        return Array.isArray(arr) ? arr : [];
+    }
+    catch (e) {
+        return [];
+    }
+};
+const storePlans = (arr) => {
+    try {
+        window.localStorage.setItem(PLANS_KEY, JSON.stringify(arr));
+        return true;
+    }
+    catch (e) {
+        return false;
+    }
+};
+// Flèche (forme) : 3 gabarits d'épaisseur — ath 1 = fine, 2 = moyenne,
+// 3 (défaut, anciens plans) = standard. Renvoie le contour fermé de la flèche.
+const arrowPathPts = (f) => {
+    const flen = f.flen != null ? f.flen : 14;
+    const ath = f.ath || 3;
+    const g = ath === 1 ? { sh: 0, hw: 3.5, hl: 8 } : ath === 2 ? { sh: 0.5, hw: 6, hl: 11 } : { sh: 1, hw: 9, hl: 13 };
+    return [[-flen, -g.sh], [3, -g.sh], [3, -g.hw], [3 + g.hl, 0], [3, g.hw], [3, g.sh], [-flen, g.sh]];
+};
 // Outil "Apport chaleur" (soudage) — Q = K·(U×I)/(1000×va), va = distance/temps.
 // Composant au niveau module : reste monté (open=false → rien affiché) pour
 // garder les valeurs saisies d'une ouverture à l'autre, et ne jamais perdre
@@ -398,23 +536,58 @@ const TextField = ({ placeholder, value, onInput, hidden, onToggleHidden, width,
 const PALETTE_COLORS = ["#232A33", "#D32F2F", "#E8600A", "#F2B705", "#2E7D32", "#1565C0", "#6A1B9A", "#8D5524"];
 // carré de couleur qui ouvre une petite palette de 8 couleurs primaires au
 // clic — composant stable au niveau module (état d'ouverture propre)
+// Pastille de couleur : la palette s'ouvre en fenêtre flottante AU-DESSUS
+// de la pastille, attachée à <body> (hors des panneaux défilants, donc
+// jamais coupée ni cachée sous la barre du bas).
 const ColorSwatch = ({ value, onChange, title }) => {
-    const [open, setOpen] = useState(false);
+    const openPalette = (btn) => {
+        const r = btn.getBoundingClientRect();
+        const cols = 4, cell = 34, gap = 8, pad = 12;
+        const W = cols * cell + (cols - 1) * gap + pad * 2;
+        const rows = Math.ceil(PALETTE_COLORS.length / cols);
+        const H = rows * cell + (rows - 1) * gap + pad * 2;
+        const vw = window.innerWidth, vh = window.innerHeight;
+        const left = Math.max(8, Math.min(vw - W - 8, r.left + r.width / 2 - W / 2));
+        const above = r.top - H - 10 >= 8;
+        const dim = document.createElement("div");
+        dim.className = "ios-dim";
+        dim.style.cssText = "position:fixed;inset:0;z-index:99990;background:rgba(0,0,0,0.12);";
+        const box = document.createElement("div");
+        box.className = "ios-menu " + (above ? "up" : "down");
+        box.style.cssText = "position:fixed;z-index:99991;left:" + left + "px;" +
+            (above ? "bottom:" + (vh - r.top + 10) + "px;" : "top:" + (r.bottom + 10) + "px;") +
+            "width:" + W + "px;box-sizing:border-box;padding:" + pad + "px;display:grid;" +
+            "grid-template-columns:repeat(" + cols + "," + cell + "px);gap:" + gap + "px;" +
+            "background:rgba(249,249,251,0.9);-webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);" +
+            "border-radius:14px;box-shadow:0 12px 44px rgba(0,0,0,0.24),0 0 0 0.5px rgba(0,0,0,0.06);";
+        box.style.setProperty("--ox", Math.round(r.left + r.width / 2 - left) + "px");
+        let closed = false;
+        const close = () => {
+            if (closed)
+                return;
+            closed = true;
+            box.classList.add("closing");
+            dim.classList.add("closing");
+            setTimeout(() => { box.remove(); dim.remove(); }, 170);
+        };
+        dim.onclick = close;
+        PALETTE_COLORS.forEach((col) => {
+            const on = col.toLowerCase() === (value || "").toLowerCase();
+            const b = document.createElement("button");
+            b.setAttribute("aria-label", "Couleur " + col);
+            b.style.cssText = "width:" + cell + "px;height:" + cell + "px;border-radius:50%;padding:0;cursor:pointer;background:" + col + ";" +
+                (on ? "border:3px solid #fff;box-shadow:0 0 0 2.5px " + COLORS.accent + ";" : "border:1px solid rgba(0,0,0,0.18);");
+            b.onclick = () => { onChange(col); close(); };
+            box.appendChild(b);
+        });
+        document.body.appendChild(dim);
+        document.body.appendChild(box);
+    };
     return (React.createElement("div", { style: { position: "relative", flexShrink: 0 } },
-        React.createElement("button", { title: title, onClick: () => setOpen((o) => !o), style: {
+        React.createElement("button", { title: title, onClick: (e) => openPalette(e.currentTarget), style: {
                 width: 38, height: 38, borderRadius: 8, padding: 0,
                 border: `1.4px solid ${COLORS.ink}`, background: value, cursor: "pointer",
-            } }),
-        open && (React.createElement("div", { style: {
-                position: "absolute", top: 44, left: 0, zIndex: 50,
-                background: COLORS.sheet, border: `1.4px solid ${COLORS.ink}`, borderRadius: 8,
-                padding: 6, display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 5,
-                boxShadow: "0 4px 14px rgba(0,0,0,0.18)",
-            } }, PALETTE_COLORS.map((c) => (React.createElement("button", { key: c, onClick: () => { onChange(c); setOpen(false); }, style: {
-                width: 28, height: 28, borderRadius: 6, padding: 0,
-                border: c.toLowerCase() === (value || "").toLowerCase() ? `2.5px solid ${COLORS.accent}` : `1px solid ${COLORS.ink}`,
-                background: c, cursor: "pointer",
-            } })))))));
+            } })));
 };
 // vue 3D navigable (orbite au glissement, zoom molette/pincement) — tracé
 // et accessoires uniquement, sans cotes ni génie civil ; composant stable
@@ -3707,6 +3880,11 @@ function IsoChantier() {
     const [settingsAnchor, setSettingsAnchor] = useState(null);
     const [showPrintPanel, setShowPrintPanel] = useState(false);
     const [toolsAnchor, setToolsAnchor] = useState(null);
+    const [menuClosing, setMenuClosing] = useState(false);
+    const [catMenu, setCatMenu] = useState(null); // { left, bottom, ox } quand la fenêtre des catégories est ouverte
+    const [catClosing, setCatClosing] = useState(false);
+    const [textTool, setTextTool] = useState(false); // bouton T : pose de zones de texte seule
+    useEffect(() => { if (mode !== "add") setTextTool(false); }, [mode]);
     const [showHeat, setShowHeat] = useState(false);
     const [showDev, setShowDev] = useState(false);
     const [devMounted, setDevMounted] = useState(false);
@@ -3761,14 +3939,8 @@ function IsoChantier() {
                 ctx.fillStyle = COLORS.paper;
                 ctx.fillRect(0, 0, w, h);
                 ctx.drawImage(img, 0, 0, w, h);
-                canvas.toBlob((blob) => {
-                    const a = document.createElement("a");
-                    a.href = URL.createObjectURL(blob);
-                    a.download = "Debit_" + titre + ".png";
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                });
+                const du = canvas.toDataURL("image/png");
+                saveBlobFile(dataUrlToBlob(du), "Debit_" + titre + ".png", du);
             };
             img.onerror = () => window.alert("Export PNG impossible sur ce navigateur — essaie PDF à la place.");
             img.src = url;
@@ -3789,7 +3961,15 @@ function IsoChantier() {
         onFocus: () => setCalcFocus(key),
         onBlur: () => setCalcFocus((f) => (f === key ? null : f)),
     });
-    const [plans, setPlans] = useState([]);
+    const [plans, setPlans] = useState(loadStoredPlans);
+    const plansFirstRef = useRef(true);
+    useEffect(() => {
+        if (plansFirstRef.current) {
+            plansFirstRef.current = false;
+            return;
+        }
+        storePlans(plans);
+    }, [plans]);
     const [planName, setPlanName] = useState("");
     const [currentPlanId, setCurrentPlanId] = useState(null);
     const [saveMsg, setSaveMsg] = useState("");
@@ -4020,9 +4200,11 @@ function IsoChantier() {
         const name = planName.trim() || "Plan sans nom";
         const key = currentPlanId || "plan:" + Date.now();
         const payload = { key, name, updatedAt: Date.now(), data: currentPlanData() };
-        setPlans((pp) => [payload, ...pp.filter((p) => p.key !== key)]);
+        const nextPlans = [payload, ...plans.filter((p) => p.key !== key)];
+        const stored = storePlans(nextPlans);
+        setPlans(nextPlans);
         setCurrentPlanId(key);
-        setSaveMsg("Gardé en session ✓ — pensez à Exporter");
+        setSaveMsg(stored ? "Enregistré sur cet appareil ✓" : "Gardé en session ✓ — pensez à Exporter");
         setTimeout(() => setSaveMsg(""), 2500);
     };
     const loadPlan = (key) => {
@@ -4047,12 +4229,7 @@ function IsoChantier() {
         const name = planName.trim() || "plan-iso";
         const payload = { name, updatedAt: Date.now(), data: currentPlanData() };
         const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = name.replace(/[^\w\-]+/g, "_") + ".json";
-        a.click();
-        URL.revokeObjectURL(url);
+        saveBlobFile(blob, name.replace(/[^\w\-]+/g, "_") + ".json");
     };
     const importPlan = (file) => {
         const r = new FileReader();
@@ -4229,6 +4406,11 @@ function IsoChantier() {
             else {
                 d = Math.hypot(p.x - pt.x, p.y - pt.y);
                 r = 11 * Math.max(0.5, Math.min(1.5, zoom));
+                // organe posé sur un tube (bride, vanne, té…) : zone de toucher
+                // à la taille du doigt, sinon un appui légèrement à côté
+                // sélectionne le tube qui passe dessous au lieu de l'organe
+                if (INLINE_TYPES.has(f.type))
+                    r = Math.max(18, r);
             }
             if (d < r && d < bd) {
                 bd = d;
@@ -4399,6 +4581,26 @@ function IsoChantier() {
         const r = svgRef.current.getBoundingClientRect();
         return { x: e.clientX - r.left, y: e.clientY - r.top };
     };
+    // Glisser d'organe : rien ne bouge tant que le doigt n'a pas franchi un
+    // seuil (un simple toucher sélectionne sans déplacer), et l'organe garde
+    // l'écart pris au départ (il ne saute pas sous le doigt).
+    const startFitDrag = (hitId, pt, e) => {
+        const f = fittings.find((x) => x.id === hitId);
+        const fsp = f ? fittingScreen(f) : null;
+        dragRef.current = {
+            fitId: hitId, armed: false,
+            sx: pt.x, sy: pt.y,
+            gx: fsp ? fsp.x - pt.x : 0, gy: fsp ? fsp.y - pt.y : 0,
+            thr: e && e.pointerType === "mouse" ? 5 : 14,
+            origSegId: f ? f.segId : undefined, origT: f ? f.t : undefined,
+            origWx: f ? f.wx : undefined, origWy: f ? f.wy : undefined,
+        };
+    };
+    const restoreFitDrag = (dr) => {
+        setFittings((ff) => ff.map((x) => x.id === dr.fitId
+            ? { ...x, segId: dr.origSegId, t: dr.origT, wx: dr.origWx, wy: dr.origWy }
+            : x));
+    };
     const handleDown = (e) => {
         // capture le pointeur : garantit que pointermove/up/cancel pour CE
         // doigt seront toujours reçus par le SVG, même s'il dérive hors de
@@ -4468,9 +4670,7 @@ function IsoChantier() {
             }
             const hit = findFittingAt(pt);
             if (hit) {
-                snapshot();
-                const hitF = fittings.find((x) => x.id === hit);
-                dragRef.current = { fitId: hit, origSegId: hitF ? hitF.segId : undefined, origT: hitF ? hitF.t : undefined };
+                startFitDrag(hit, pt, e);
                 setSelFit(hit);
             }
         }
@@ -4675,9 +4875,7 @@ function IsoChantier() {
             {
                 const hitFit = findFittingAt(pt);
                 if (hitFit) {
-                    snapshot();
-                    const hitF2 = fittings.find((x) => x.id === hitFit);
-                    dragRef.current = { fitId: hitFit, origSegId: hitF2 ? hitF2.segId : undefined, origT: hitF2 ? hitF2.t : undefined };
+                    startFitDrag(hitFit, pt, e);
                     setSelFit(hitFit);
                     setSelSeg(null);
                     setSelSegCote(null);
@@ -4859,8 +5057,18 @@ function IsoChantier() {
             }
         }
         else if ((mode === "add" || mode === "select") && dragRef.current && dragRef.current.fitId) {
-            const w = toWorld(pt.x, pt.y);
-            const id = dragRef.current.fitId;
+            const dr = dragRef.current;
+            if (!dr.armed) {
+                if (Math.hypot(pt.x - dr.sx, pt.y - dr.sy) < dr.thr) {
+                    t.lx = pt.x;
+                    t.ly = pt.y;
+                    return;
+                }
+                dr.armed = true;
+                snapshot();
+            }
+            const w = toWorld(pt.x + dr.gx, pt.y + dr.gy);
+            const id = dr.fitId;
             setFittings((ff) => ff.map((f) => f.id === id ? { ...f, segId: undefined, t: undefined, wx: w.wx, wy: w.wy } : f));
         }
         else if (t.moved) {
@@ -4961,10 +5169,16 @@ function IsoChantier() {
             tapRef.current = null;
             return;
         }
+        if ((mode === "add" || mode === "select") && dragRef.current && dragRef.current.fitId && !dragRef.current.armed) {
+            // simple toucher : l'organe est sélectionné, il ne bouge pas
+            dragRef.current = null;
+            tapRef.current = null;
+            return;
+        }
         if ((mode === "add" || mode === "select") && dragRef.current && dragRef.current.fitId) {
             const id = dragRef.current.fitId;
             const f = fittings.find((x) => x.id === id);
-            const snap = snapFitting(pt, f ? f.type : "");
+            const snap = snapFitting({ x: pt.x + dragRef.current.gx, y: pt.y + dragRef.current.gy }, f ? f.type : "");
             if (snap) {
                 setFittings((ff) => ff.map((x) => x.id === id ? { ...x, segId: snap.segId, t: snap.t, wx: undefined, wy: undefined } : x));
             }
@@ -4999,6 +5213,10 @@ function IsoChantier() {
         tapRef.current = null;
     };
     const handleCancel = (e) => {
+        // geste interrompu par iOS (pointercancel) pendant un glisser d'organe :
+        // l'organe retourne à sa place d'origine au lieu de rester à moitié déplacé
+        if (dragRef.current && dragRef.current.fitId && dragRef.current.armed)
+            restoreFitDrag(dragRef.current);
         pointers.current.delete(e.pointerId);
         if (pointers.current.size < 2)
             pinchRef.current = null;
@@ -5658,6 +5876,20 @@ function IsoChantier() {
         return { w: toWorld(pt.x, pt.y) };
     };
     const handleCote = (pt) => {
+        // toucher le chiffre d'une cote de tube : on ouvre ses réglages de position
+        if (!pendingPt) {
+            for (const s of segments) {
+                if (s.cote == null)
+                    continue;
+                const tp = segCoteTextPos(s);
+                if (tp && Math.hypot(tp.x - pt.x, tp.y - pt.y) < 22) {
+                    setSelSegCote(s.id);
+                    setSelDim(null);
+                    return;
+                }
+            }
+        }
+        setSelSegCote(null);
         let hit = null, bd = 1e9;
         for (const d of freeDims) {
             const P = resolvePoint(d.p1), Q = resolvePoint(d.p2);
@@ -5911,11 +6143,41 @@ function IsoChantier() {
     // écartement perpendiculaire au sens du flux (papillon, clapet, réduction...)
     // — sur un tube horizontal (axe X/Y) l'écart reste vertical ; sur un tube
     // vertical (axe Z) il s'aligne sur l'axe X ; en oblique/libre, repli vertical.
+    // axes 3D perpendiculaires au tube : [principal, second] (le principal
+    // est l'orientation historique : Z pour un tube horizontal, X pour un
+    // tube vertical)
+    const perpAxesFor = (f) => {
+        const axis = segPureAxis(f);
+        if (axis == null)
+            return null;
+        const p = axis === 2 ? 0 : 2;
+        const o = [0, 1, 2].find((i) => i !== axis && i !== p);
+        return { axis, p, o };
+    };
+    // orientations iso d'une bride (f.wOri) : 0 = axe principal, 1 = second
+    // axe perpendiculaire, 2 = à 45° dans le plan de la bride. (L'autre
+    // diagonale se projette exactement sur le tube en iso : exclue.)
+    const wingAbsFor = (f) => {
+        const pa = perpAxesFor(f);
+        if (!pa)
+            return null;
+        const P = ISO_SCREEN_AXES[pa.p], O = ISO_SCREEN_AXES[pa.o];
+        const ori = f.wOri || 0;
+        if (ori === 1)
+            return { x: O.x, y: O.y };
+        if (ori === 2) {
+            // des deux diagonales, garder celle qui ne se couche pas sur le tube
+            const a = { x: (P.x + O.x) / Math.SQRT2, y: (P.y + O.y) / Math.SQRT2 };
+            const b = { x: (P.x - O.x) / Math.SQRT2, y: (P.y - O.y) / Math.SQRT2 };
+            return Math.hypot(a.x, a.y) >= Math.hypot(b.x, b.y) ? a : b;
+        }
+        return { x: P.x, y: P.y };
+    };
     const wingVecFor = (f, baseAngleDeg, wingLen) => {
         const axis = segPureAxis(f);
         if (axis == null)
             return { x: 0, y: wingLen };
-        const absWing = axis === 2 ? ISO_SCREEN_AXES[0] : ISO_SCREEN_AXES[2];
+        const absWing = WORI_TYPES.has(f.type) ? wingAbsFor(f) : (axis === 2 ? ISO_SCREEN_AXES[0] : ISO_SCREEN_AXES[2]);
         const rad = (baseAngleDeg * Math.PI) / 180;
         const wx = (absWing.x * Math.cos(rad) + absWing.y * Math.sin(rad)) * wingLen;
         const wy = (-absWing.x * Math.sin(rad) + absWing.y * Math.cos(rad)) * wingLen;
@@ -5957,13 +6219,16 @@ function IsoChantier() {
             // Vanne papillon : papillon + battant en zigzag central
             body = (React.createElement(React.Fragment, null,
                 React.createElement("path", { d: bowtiePath(f, baseAngle || 0), ...common, "stroke-linejoin": "round" }),
-                React.createElement("path", { d: `M ${-3.5},${-5} L ${1.5},${0} L ${-3.5},${5}`, fill: "none", stroke: (f.color || COLORS.ink), "stroke-width": 1.4, "stroke-linejoin": "round" })));
+                (() => {
+                    const wP = wingVecFor(f, baseAngle || 0, 5);
+                    return React.createElement("path", { d: `M ${-3.5 - wP.x},${-wP.y} L ${1.5},${0} L ${-3.5 + wP.x},${wP.y}`, fill: "none", stroke: (f.color || COLORS.ink), "stroke-width": 1.4, "stroke-linejoin": "round" });
+                })()));
         else if (type === "clapet") {
             // Clapet de retenue à boule : bille sur siège (planche : ─▷●─)
             const wB = wingVecFor(f, baseAngle || 0, 6);
             const wS = wingVecFor(f, baseAngle || 0, 7);
             body = (React.createElement(React.Fragment, null,
-                React.createElement("path", { d: `M ${-9 - wB.x},${-wB.y} L 3,0 L ${-9 + wB.x},${wB.y} Z`, fill: "none", stroke: (f.color || COLORS.ink), "stroke-width": 1.6, "stroke-linejoin": "round" }),
+                React.createElement("path", { d: `M ${-9 - wB.x},${-wB.y} L 3,0 L ${-9 + wB.x},${wB.y} Z`, fill: COLORS.paper, stroke: (f.color || COLORS.ink), "stroke-width": 1.6, "stroke-linejoin": "round" }),
                 React.createElement("line", { x1: 4 - wS.x, y1: -wS.y, x2: 4 + wS.x, y2: wS.y, stroke: (f.color || COLORS.ink), "stroke-width": 2 })));
         }
         else if (type === "bride") {
@@ -6147,9 +6412,8 @@ function IsoChantier() {
             else if (f.shape === "demi")
                 body = React.createElement("path", { d: "M -12,0 A 12 12 0 0 1 12,0 Z", fill: fillV, stroke: col, "stroke-width": sw, "stroke-linejoin": "round" });
             else {
-                const flen = f.flen != null ? f.flen : 14;
-                const shaftH = 1;
-                body = React.createElement("path", { d: `M ${-flen},${-shaftH} L 3,${-shaftH} L 3,-9 L 16,0 L 3,9 L 3,${shaftH} L ${-flen},${shaftH} Z`, fill: fillV, stroke: col, "stroke-width": sw, "stroke-linejoin": "round" });
+                const ap = arrowPathPts(f);
+                body = React.createElement("path", { d: "M " + ap.map((p) => p[0] + "," + p[1]).join(" L ") + " Z", fill: fillV, stroke: col, "stroke-width": sw, "stroke-linejoin": "round" });
             }
         }
         else if (type === "suite")
@@ -6171,7 +6435,7 @@ function IsoChantier() {
             const w = Math.max(20, (f.text || "").length * size * 0.62);
             body = (React.createElement(React.Fragment, null,
                 f.hl && React.createElement("rect", { x: -w / 2 - 3, y: -size * 0.75, width: w + 6, height: size * 1.4, fill: "#F5E04A", opacity: 0.75, rx: 2 }),
-                React.createElement("text", { x: 0, y: size * 0.32, "font-size": size, "font-family": "'Archivo', sans-serif", "font-weight": f.bold ? 800 : 500, fontStyle: f.italic ? "italic" : "normal", fill: (f.color || COLORS.ink), "text-anchor": "middle" }, f.text || "")));
+                React.createElement("text", { x: 0, y: size * 0.32, "font-size": size, "font-family": "'Archivo', sans-serif", "font-weight": f.bold ? 800 : 500, "font-style": f.italic ? "italic" : "normal", "text-decoration": f.ul ? "underline" : "none", fill: (f.color || COLORS.ink), "text-anchor": "middle" }, f.text || "")));
         }
         else if (type === "mur")
             body = (React.createElement(React.Fragment, null,
@@ -6701,9 +6965,26 @@ function IsoChantier() {
             !(mod && mod.angleHidden) && (React.createElement("text", { x: C.x + 9, y: C.y - 9, "font-size": fs(7.5), "font-family": "'IBM Plex Mono', monospace", fill: sel ? COLORS.accent : COLORS.cote }, e.label)),
             mod && mod.chord && !mod.chordHidden && (React.createElement(DimLine, { P: P1, Q: P2, value: mod.chord, color: COLORS.cote, off: 18 }))));
     });
-    const renderNodes = () => (React.createElement(React.Fragment, null,
+    // nœuds recouverts par un jeu de brides : pas de point de jonction au
+    // milieu du symbole (le point tombait entre les deux traits)
+    const nodesUnderBrides = () => {
+        const hid = new Set();
+        const brides = fittings.filter((f) => f.type === "bride" && f.segId);
+        if (!brides.length)
+            return hid;
+        const pos = brides.map((f) => fittingScreen(f)).filter(Boolean);
+        for (const [k, p] of Object.entries(nodes)) {
+            const s = proj(p);
+            if (pos.some((q) => Math.hypot(q.x - s.x, q.y - s.y) < 6))
+                hid.add(k);
+        }
+        return hid;
+    };
+    const renderNodes = () => {
+        const underBride = nodesUnderBrides();
+        return (React.createElement(React.Fragment, null,
         Object.entries(nodes).map(([k, p]) => {
-            if (elbowByNode[k])
+            if (elbowByNode[k] || (underBride.has(k) && k !== current))
                 return null;
             const s = proj(p);
             return React.createElement("circle", { key: k, cx: s.x, cy: s.y, r: k === current ? 5 : 2.6, fill: k === current ? COLORS.accent : COLORS.pipe });
@@ -6712,6 +6993,7 @@ function IsoChantier() {
             const s = proj(nodes[current]);
             return React.createElement("circle", { cx: s.x, cy: s.y, r: 5, fill: COLORS.accent });
         })()));
+    };
     const renderNorth = () => {
         const r = RV();
         const cx = r.w - 34, cy = 34;
@@ -7325,9 +7607,10 @@ function IsoChantier() {
                     drawDimE(P1, P2, mod.chord, COLORS.cote, 18, false, null, null);
                 }
             }
-            // ---- nœuds de jonction (hors coudes) ----
+            // ---- nœuds de jonction (hors coudes et hors jeux de brides) ----
+            const underBrideE = nodesUnderBrides();
             for (const [k, p] of Object.entries(nodes)) {
-                if (elbowByNode[k])
+                if (elbowByNode[k] || underBrideE.has(k))
                     continue;
                 const s = projE(p);
                 ctx.beginPath();
@@ -7374,10 +7657,11 @@ function IsoChantier() {
                         ctx.stroke();
                     }
                     else if (type === "vpapillon") {
+                        const wP = wingVecFor(f, baseAngle || 0, 5);
                         ctx.beginPath();
-                        ctx.moveTo(-3.5, -5);
+                        ctx.moveTo(-3.5 - wP.x, -wP.y);
                         ctx.lineTo(1.5, 0);
-                        ctx.lineTo(-3.5, 5);
+                        ctx.lineTo(-3.5 + wP.x, wP.y);
                         ctx.strokeStyle = ink;
                         ctx.lineWidth = 1.4;
                         ctx.stroke();
@@ -7391,6 +7675,8 @@ function IsoChantier() {
                     ctx.lineTo(3, 0);
                     ctx.lineTo(-9 + wB.x, wB.y);
                     ctx.closePath();
+                    fillInkPaper();
+                    ctx.fill();
                     ctx.strokeStyle = ink;
                     ctx.lineWidth = 1.6;
                     ctx.stroke();
@@ -7831,16 +8117,10 @@ function IsoChantier() {
                         ctx.stroke();
                     }
                     else {
-                        const flen = f.flen != null ? f.flen : 14;
-                        const shaftH = 1;
+                        const ap = arrowPathPts(f);
+                        ctx.lineJoin = "round";
                         ctx.beginPath();
-                        ctx.moveTo(-flen, -shaftH);
-                        ctx.lineTo(3, -shaftH);
-                        ctx.lineTo(3, -9);
-                        ctx.lineTo(16, 0);
-                        ctx.lineTo(3, 9);
-                        ctx.lineTo(3, shaftH);
-                        ctx.lineTo(-flen, shaftH);
+                        ap.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
                         ctx.closePath();
                         if (f.filled)
                             ctx.fill();
@@ -7886,9 +8166,18 @@ function IsoChantier() {
                         ctx.fillRect(-w / 2 - 3, -size * 0.75, w + 6, size * 1.4);
                         ctx.globalAlpha = isStruct ? 0.55 : 1;
                     }
-                    drawTextE(f.text || "", 0, size * 0.32, size, COLORS.ink, {
+                    drawTextE(f.text || "", 0, size * 0.32, size, f.color || COLORS.ink, {
                         weight: f.bold ? 800 : 500, italic: !!f.italic, baseline: "alphabetic",
                     });
+                    if (f.ul && f.text) {
+                        const wU = String(f.text).length * size * 0.52;
+                        ctx.strokeStyle = f.color || COLORS.ink;
+                        ctx.lineWidth = Math.max(1, size / 14);
+                        ctx.beginPath();
+                        ctx.moveTo(-wU / 2, size * 0.32 + size * 0.14);
+                        ctx.lineTo(wU / 2, size * 0.32 + size * 0.14);
+                        ctx.stroke();
+                    }
                 }
                 else if (type === "mur") {
                     const W1 = (1.8 * zl) / scl, W2 = (1 * zl) / scl;
@@ -8238,12 +8527,8 @@ function IsoChantier() {
                 setTimeout(() => { window.print(); }, 150);
                 return;
             }
-            const a = document.createElement("a");
-            a.href = dataUrl;
-            a.download = (cart.titre ? cart.titre.replace(/[^\w-]+/g, "_") : "iso-tuyauterie") + ".png";
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
+            const pngName = (cart.titre ? cart.titre.replace(/[^\w-]+/g, "_") : "iso-tuyauterie") + ".png";
+            saveBlobFile(dataUrlToBlob(dataUrl), pngName, dataUrl);
         }
         catch (eOuter) {
             resetTouchState();
@@ -8563,20 +8848,42 @@ function IsoChantier() {
         whiteSpace: "nowrap",
     };
     const chipOn = { ...chip, background: COLORS.ink, color: COLORS.paper };
+    // bouton compact des panneaux de sélection (tout tient sur une ligne)
+    const cb = {
+        ...chip, height: 36, minWidth: 36, padding: "0 8px", boxSizing: "border-box",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 15, lineHeight: 1, flexShrink: 0,
+    };
+    const cbOn = { ...cb, background: COLORS.ink, color: COLORS.paper };
+    const IOS_FONT = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif";
     const menuBox = {
-        position: "fixed", zIndex: 30, minWidth: 270, maxWidth: "calc(100vw - 16px)",
-        background: "rgba(248,248,250,0.92)", backdropFilter: "blur(22px)", WebkitBackdropFilter: "blur(22px)",
-        borderRadius: 14, boxShadow: "0 10px 34px rgba(0,0,0,0.28)",
-        border: "0.5px solid rgba(0,0,0,0.08)", overflow: "hidden",
-        display: "flex", flexDirection: "column",
+        position: "fixed", zIndex: 30, width: 272, maxWidth: "calc(100vw - 16px)",
+        background: "rgba(249,249,251,0.78)", backdropFilter: "blur(30px) saturate(180%)", WebkitBackdropFilter: "blur(30px) saturate(180%)",
+        borderRadius: 14, boxShadow: "0 12px 44px rgba(0,0,0,0.24), 0 0 0 0.5px rgba(0,0,0,0.06)",
+        overflow: "hidden", display: "flex", flexDirection: "column",
+        fontFamily: IOS_FONT, WebkitUserSelect: "none", userSelect: "none",
     };
     const menuItem = {
-        display: "block", width: "100%", textAlign: "left", boxSizing: "border-box",
-        padding: "13px 16px", border: "none", borderTop: "0.5px solid rgba(0,0,0,0.1)",
-        background: "transparent", fontFamily: "'Archivo', sans-serif", fontWeight: 600,
-        fontSize: 14.5, color: COLORS.ink, cursor: "pointer",
+        display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", boxSizing: "border-box",
+        padding: "11px 16px", minHeight: 44, border: "none", borderTop: "0.5px solid rgba(60,60,67,0.22)",
+        background: "transparent", fontFamily: IOS_FONT, fontWeight: 400,
+        fontSize: 16.5, letterSpacing: -0.2, color: "#000", cursor: "pointer",
     };
     const menuItemFirst = { ...menuItem, borderTop: "none" };
+    const menuSep = { height: 8, background: "rgba(60,60,67,0.10)", flexShrink: 0 };
+    // ligne de menu iOS : libellé à gauche, pictogramme à droite
+    const mItem = (label, icon, onClick, first, extra) => React.createElement("button", { className: "ios-item", style: { ...(first ? menuItemFirst : menuItem), ...(extra || {}) }, onClick: onClick },
+        React.createElement("span", { style: { flex: 1 } }, label),
+        icon ? React.createElement("span", { style: { width: 22, textAlign: "center", fontSize: 17, color: "#3C3C43", opacity: 0.85 } }, icon) : null);
+    // contrôle segmenté iOS
+    const iosSeg = (opts, value, onChange) => React.createElement("div", { style: { display: "flex", background: "rgba(118,118,128,0.14)", borderRadius: 9, padding: 2, gap: 2 } },
+        opts.map(([v, lbl]) => React.createElement("button", { key: v, onClick: onChange.bind(null, v), style: {
+                border: "none", borderRadius: 7, padding: "5px 11px", fontFamily: IOS_FONT, fontSize: 13.5,
+                fontWeight: value === v ? 600 : 400, color: "#000", cursor: "pointer",
+                background: value === v ? "#fff" : "transparent",
+                boxShadow: value === v ? "0 2px 6px rgba(0,0,0,0.12), 0 0 0 0.5px rgba(0,0,0,0.04)" : "none",
+                transition: "background 0.15s",
+            } }, lbl)));
     const iconBtn = {
         height: 42, minWidth: 44, borderRadius: 8, border: "none",
         background: "rgba(255,255,255,0.14)", color: COLORS.paper,
@@ -8600,39 +8907,163 @@ function IsoChantier() {
     const isInlineSel = selectedFitting && INLINE_TYPES.has(selectedFitting.type);
     const isPenteSel = selectedFitting && selectedFitting.type === "pente";
     const panelDragRef = useRef(null);
-    const settingsMenuList = React.createElement(React.Fragment, null,
-        React.createElement("button", { style: menuItemFirst, onClick: () => { setSettingsAnchor(null); toggleFullscreen(); } }, "\u26F6 Plein \u00E9cran"),
-        React.createElement("div", { style: { ...menuItem, display: "flex", alignItems: "center", gap: 8, cursor: "default" } },
+    const closeMenusAnimated = () => {
+        if (menuClosing)
+            return;
+        setMenuClosing(true);
+        setTimeout(() => {
+            setSettingsAnchor(null);
+            setToolsAnchor(null);
+            setShowPrintPanel(false);
+            setMenuClosing(false);
+        }, 170);
+    };
+    const closeMenusNow = () => {
+        setSettingsAnchor(null);
+        setToolsAnchor(null);
+        setShowPrintPanel(false);
+        setMenuClosing(false);
+    };
+    const stepBtn = { border: "none", background: "transparent", width: 40, height: 30, fontSize: 18, fontFamily: IOS_FONT, color: "#000", cursor: "pointer" };
+    const settingsMenuList = React.createElement("div", { className: "ios-sub", style: { display: "flex", flexDirection: "column" } },
+        mItem("Plein \u00E9cran", "\u26F6", () => { closeMenusNow(); toggleFullscreen(); }, true),
+        React.createElement("div", { style: { ...menuItem, cursor: "default" } },
             React.createElement("span", { style: { flex: 1 } }, "Taille du texte"),
-            React.createElement("button", { style: { ...chip, padding: "4px 12px", fontSize: 14 }, onClick: () => setFontScale((v) => Math.max(0.6, +(v - 0.15).toFixed(2))) }, "A\u2212"),
-            React.createElement("span", { style: { minWidth: 40, textAlign: "center", fontSize: 12, color: COLORS.cote } }, Math.round(fontScale * 100), "%"),
-            React.createElement("button", { style: { ...chip, padding: "4px 12px", fontSize: 14 }, onClick: () => setFontScale((v) => Math.min(2, +(v + 0.15).toFixed(2))) }, "A+")),
-        React.createElement("div", { style: { ...menuItem, display: "flex", alignItems: "center", gap: 8, cursor: "default" } },
+            React.createElement("span", { style: { fontSize: 13, color: "#8A8A8E", minWidth: 38, textAlign: "right" } }, Math.round(fontScale * 100), " %"),
+            React.createElement("div", { style: { display: "flex", alignItems: "center", background: "rgba(118,118,128,0.14)", borderRadius: 9 } },
+                React.createElement("button", { style: stepBtn, onClick: () => setFontScale((v) => Math.max(0.6, +(v - 0.15).toFixed(2))) }, "\u2212"),
+                React.createElement("span", { style: { width: 0.5, height: 18, background: "rgba(60,60,67,0.3)" } }),
+                React.createElement("button", { style: stepBtn, onClick: () => setFontScale((v) => Math.min(2, +(v + 0.15).toFixed(2))) }, "+"))),
+        React.createElement("div", { style: { ...menuItem, cursor: "default" } },
             React.createElement("span", { style: { flex: 1 } }, "Quadrillage"),
-            React.createElement("button", { style: { ...(gridTheme !== "blue" ? chipOn : chip), padding: "4px 10px", fontSize: 12 }, onClick: () => setGridTheme("default") }, "Standard"),
-            React.createElement("button", { style: { ...(gridTheme === "blue" ? chipOn : chip), padding: "4px 10px", fontSize: 12 }, onClick: () => setGridTheme("blue") }, "Bleu")),
-        React.createElement("button", { style: menuItem, onClick: () => { setSettingsAnchor(null); setShowPlans(true); } }, "Plans"),
-        React.createElement("button", { style: menuItem, onClick: () => { setSettingsAnchor(null); setShowCart(true); } }, "Cartouche"),
-        React.createElement("button", { style: menuItem, onClick: () => { setSettingsAnchor(null); setShowBom(true); } }, "Nomenclature"),
-        React.createElement("button", { style: menuItem, onClick: () => setShowPrintPanel(true) }, "Impression PDF / PNG"));
-    const settingsPrintPanel = React.createElement(React.Fragment, null,
-        React.createElement("button", { style: menuItemFirst, onClick: () => setShowPrintPanel(false) }, "\u2039 Retour"),
-        React.createElement("button", { style: menuItem, onClick: () => setExportBg((b) => (b === "paper" ? "white" : b === "white" ? "blue" : "paper")) },
-            "Fond : ",
-            exportBg === "paper" ? "Blanc" : exportBg === "white" ? "Aucun" : "Bleu"),
-        React.createElement("div", { style: { display: "flex", gap: 8, padding: "10px 16px 14px", borderTop: "0.5px solid rgba(0,0,0,0.1)" } },
-            React.createElement("button", { style: { ...chipOn, flex: 1, textAlign: "center" }, onClick: () => { setSettingsAnchor(null); setShowPrintPanel(false); exportPng(); } }, "PNG"),
-            React.createElement("button", { style: { ...chipOn, flex: 1, textAlign: "center" }, onClick: () => { setSettingsAnchor(null); setShowPrintPanel(false); exportPng("pdf"); } }, "PDF")));
+            iosSeg([["default", "Standard"], ["blue", "Bleu"]], gridTheme === "blue" ? "blue" : "default", (v) => setGridTheme(v))),
+        React.createElement("div", { style: menuSep }),
+        mItem("Plans", "\u2750", () => { closeMenusNow(); setShowPlans(true); }, true),
+        mItem("Cartouche", "\u25AD", () => { closeMenusNow(); setShowCart(true); }),
+        mItem("Nomenclature", "\u2630", () => { closeMenusNow(); setShowBom(true); }),
+        mItem("Impression PDF / PNG", "\u203A", () => setShowPrintPanel(true)));
+    const settingsPrintPanel = React.createElement("div", { className: "ios-sub", style: { display: "flex", flexDirection: "column" } },
+        mItem("Retour", "\u2039", () => setShowPrintPanel(false), true, { color: "#007AFF" }),
+        React.createElement("div", { style: { ...menuItem, cursor: "default" } },
+            React.createElement("span", { style: { flex: 1 } }, "Fond"),
+            iosSeg([["paper", "Blanc"], ["white", "Aucun"], ["blue", "Bleu"]], exportBg, (v) => setExportBg(v))),
+        React.createElement("div", { style: menuSep }),
+        mItem("Exporter en PNG", "\u2B07\uFE0E", () => { closeMenusNow(); exportPng(); }, true),
+        mItem("Imprimer / PDF", "\u2399", () => { closeMenusNow(); exportPng("pdf"); }));
+    const dimLayer = React.createElement("div", { className: "ios-dim" + (menuClosing ? " closing" : ""), onClick: closeMenusAnimated, style: { position: "fixed", inset: 0, zIndex: 29, background: "rgba(0,0,0,0.12)" } });
     const settingsMenu = settingsAnchor && React.createElement(React.Fragment, null,
-        React.createElement("div", { onClick: () => { setSettingsAnchor(null); setShowPrintPanel(false); }, style: { position: "fixed", inset: 0, zIndex: 29, background: "transparent" } }),
-        React.createElement("div", { style: { ...menuBox, top: settingsAnchor.top, right: settingsAnchor.right } }, showPrintPanel ? settingsPrintPanel : settingsMenuList));
+        dimLayer,
+        React.createElement("div", { className: "ios-menu" + (menuClosing ? " closing" : ""), style: { ...menuBox, top: settingsAnchor.top, right: settingsAnchor.right } }, showPrintPanel ? settingsPrintPanel : settingsMenuList));
     const toolsMenu = toolsAnchor && React.createElement(React.Fragment, null,
-        React.createElement("div", { onClick: () => setToolsAnchor(null), style: { position: "fixed", inset: 0, zIndex: 29, background: "transparent" } }),
-        React.createElement("div", { style: { ...menuBox, top: toolsAnchor.top, right: toolsAnchor.right } },
-            React.createElement("button", { style: menuItemFirst, onClick: () => { setToolsAnchor(null); setShowHeat(true); } }, "Apport chaleur"),
-            React.createElement("button", { style: menuItem, onClick: () => { setToolsAnchor(null); setShowCalc(true); } }, "Calcul"),
-            React.createElement("button", { style: menuItem, onClick: () => { setToolsAnchor(null); setShowDebit(true); } }, "D\u00E9bit"),
-            React.createElement("button", { style: menuItem, onClick: () => { setToolsAnchor(null); setDevMounted(true); setShowDev(true); } }, "D\u00E9velopp\u00E9s")));
+        dimLayer,
+        React.createElement("div", { className: "ios-menu" + (menuClosing ? " closing" : ""), style: { ...menuBox, top: toolsAnchor.top, right: toolsAnchor.right } },
+            mItem("Apport chaleur", "\u2668\uFE0E", () => { closeMenusNow(); setShowHeat(true); }, true),
+            mItem("Calcul", "\u2211", () => { closeMenusNow(); setShowCalc(true); }),
+            mItem("D\u00E9bit", "\u2702\uFE0E", () => { closeMenusNow(); setShowDebit(true); }),
+            mItem("D\u00E9velopp\u00E9s", "\u25F0", () => { closeMenusNow(); setDevMounted(true); setShowDev(true); })));
+    const openCatMenu = (el, level) => {
+        const r = el.getBoundingClientRect();
+        const W = 276, vw = window.innerWidth;
+        const cx = r.left + r.width / 2;
+        const left = Math.max(8, Math.min(vw - W - 8, cx - W / 2));
+        setCatClosing(false);
+        const below = r.top < window.innerHeight / 2; // pastille du haut : la liste s'ouvre vers le bas
+        setCatMenu(below
+            ? { left: Math.max(8, Math.min(vw - W - 8, r.left)), bottom: null, top: r.bottom + 8, ox: "0px", level: level || "cats" }
+            : { left, bottom: window.innerHeight - r.top + 8, ox: Math.round(cx - left) + "px", level: level || "cats" });
+    };
+    const closeCatMenu = (anim) => {
+        if (!anim) {
+            setCatMenu(null);
+            setCatClosing(false);
+            return;
+        }
+        setCatClosing(true);
+        setTimeout(() => { setCatMenu(null); setCatClosing(false); }, 170);
+    };
+    // aperçu : le vrai symbole de l'appli, dessiné à taille fixe (indépendante du zoom)
+    const PREVIEW_SCALE = { mur: 0.32, sol: 0.32, tremie: 0.32, circulateur: 1.25, echangeur: 1.1, bache: 1.1, suite: 0.62, pente: 0.75 };
+    const itemPreview = (p) => {
+        const k = PREVIEW_SCALE[p.type] || 1;
+        const fake = { id: "__preview", type: p.type, sub: p.sub, shape: p.shape, scl: k / (zoom || 1), rot: 0 };
+        if (p.type === "texte")
+            Object.assign(fake, { text: "Abc", size: 13 });
+        if (p.type === "forme") {
+            Object.assign(fake, { filled: false, sw: 2, color: COLORS.ink });
+            if (p.shape === "rectangle")
+                Object.assign(fake, { rw: 16, rh: 9 });
+            if (p.shape === "fleche")
+                Object.assign(fake, { flen: 10 });
+        }
+        if (p.type === "pente")
+            fake.val = "1";
+        const cx = p.type === "suite" ? 12 : p.type === "fleche" || p.shape === "fleche" ? 30 : 28;
+        return React.createElement("svg", { width: 56, height: 36, viewBox: "0 0 56 36", style: { flexShrink: 0, display: "block", overflow: "hidden" } },
+            React.createElement("rect", { x: 0.5, y: 0.5, width: 55, height: 35, rx: 7, fill: "#fff", stroke: "rgba(60,60,67,0.18)" }),
+            INLINE_TYPES.has(p.type) ? React.createElement("line", { x1: 3, y1: 18, x2: 53, y2: 18, stroke: COLORS.pipe, "stroke-width": 2.2, "stroke-linecap": "round" }) : null,
+            React.createElement(FittingSymbol, { f: fake, x: cx, y: 18, baseAngle: 0 }));
+    };
+    const pickItem = (p) => {
+        setAddCat(p.cat);
+        setAddType(p);
+        setSelFit(null);
+        closeCatMenu(true);
+    };
+    const catLevel = catMenu && catMenu.level;
+    const catList = React.createElement("div", { key: "cats", className: "ios-sub", style: { display: "flex", flexDirection: "column" } },
+        React.createElement("div", { style: { padding: "10px 16px 6px", fontSize: 12.5, fontWeight: 600, color: "#8A8A8E", letterSpacing: 0.2 } }, "Que voulez-vous ajouter ?"),
+        CATS.map((cName) => {
+            const inf = CAT_INFO[cName] || { icon: "\u2022", color: COLORS.accent, sub: "" };
+            const on = addCat === cName;
+            return React.createElement("button", { key: cName, className: "ios-item", onClick: () => setCatMenu((m) => ({ ...m, level: cName })), style: { ...menuItem, padding: "9px 14px", gap: 12 } },
+                React.createElement("span", { style: {
+                        width: 32, height: 32, borderRadius: 8, background: inf.color, color: "#fff",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 17, fontWeight: 700, flexShrink: 0,
+                    } }, inf.icon),
+                React.createElement("span", { style: { flex: 1, display: "flex", flexDirection: "column", minWidth: 0 } },
+                    React.createElement("span", { style: { fontSize: 16.5, fontWeight: on ? 600 : 400 } }, cName),
+                    React.createElement("span", { style: { fontSize: 12.5, color: "#8A8A8E", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, inf.sub)),
+                React.createElement("span", { style: { color: "#C4C4C7", fontSize: 20, fontWeight: 400 } }, "\u203A"));
+        }));
+    const itemList = catLevel && catLevel !== "cats" && (() => {
+        const inf = CAT_INFO[catLevel] || { color: COLORS.accent };
+        const items = PALETTE.filter((p) => p.cat === catLevel);
+        return React.createElement("div", { key: "items-" + catLevel, className: "ios-sub", style: { display: "flex", flexDirection: "column" } },
+            React.createElement("button", { className: "ios-item", onClick: () => setCatMenu((m) => ({ ...m, level: "cats" })), style: { ...menuItemFirst, color: "#007AFF", gap: 6, minHeight: 40, padding: "9px 14px" } },
+                React.createElement("span", { style: { fontSize: 20, lineHeight: 1 } }, "\u2039"),
+                React.createElement("span", { style: { flex: 1 } }, "Cat\u00E9gories"),
+                React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: inf.color, textTransform: "uppercase", letterSpacing: 0.6 } }, catLevel)),
+            items.map((p, i) => {
+                const head = p.grp && (i === 0 || items[i - 1].grp !== p.grp);
+                const on = mode === "add" && addType.type === p.type && (addType.shape || null) === (p.shape || null) && (addType.sub || null) === (p.sub || null);
+                return React.createElement(React.Fragment, { key: i },
+                    head ? React.createElement("div", { style: { padding: "8px 16px 4px", fontSize: 11.5, fontWeight: 700, color: "#8A8A8E", letterSpacing: 0.6, textTransform: "uppercase", background: "rgba(60,60,67,0.06)", borderTop: "0.5px solid rgba(60,60,67,0.22)" } }, p.grp) : null,
+                    React.createElement("button", { className: "ios-item", onClick: () => pickItem(p), style: { ...menuItem, padding: "6px 14px", gap: 12, ...(head ? { borderTop: "none" } : {}) } },
+                        itemPreview(p),
+                        React.createElement("span", { style: { flex: 1, fontWeight: on ? 600 : 400 } }, p.label.replace(/^[\u25A2\u25AD\u25EF\u25E0\u27A4]\s*/, "")),
+                        on ? React.createElement("span", { style: { color: COLORS.accent, fontSize: 18, fontWeight: 700 } }, "\u2713") : null));
+            }));
+    })();
+    const catPopup = catMenu && React.createElement(React.Fragment, null,
+        React.createElement("div", { className: "ios-dim" + (catClosing ? " closing" : ""), onClick: () => closeCatMenu(true), style: { position: "fixed", inset: 0, zIndex: 29, background: "rgba(0,0,0,0.12)" } }),
+        React.createElement("div", { className: "ios-menu " + (catMenu.top != null ? "down" : "up") + (catClosing ? " closing" : ""), style: {
+                ...menuBox, width: 276, left: catMenu.left, "--ox": catMenu.ox,
+                ...(catMenu.top != null
+                    ? { top: catMenu.top, bottom: "auto", maxHeight: `calc(100vh - ${catMenu.top + 90}px)` }
+                    : { top: "auto", bottom: catMenu.bottom, maxHeight: `calc(100vh - ${catMenu.bottom + 70}px)` }),
+                overflowY: "auto", WebkitOverflowScrolling: "touch",
+            } }, itemList || catList));
+    // rappel de l'objet en cours (haut gauche du plan) : le toucher rouvre la liste
+    const addChip = mode === "add" && !textTool && React.createElement("button", { onClick: (e) => openCatMenu(e.currentTarget, addCat), style: {
+            position: "absolute", left: 10, top: 10, display: "flex", alignItems: "center", gap: 8,
+            padding: "4px 12px 4px 4px", borderRadius: 999, border: `1.6px solid ${COLORS.accent}`,
+            background: COLORS.sheet, color: COLORS.ink, fontWeight: 700, fontSize: 12.5,
+            fontFamily: "'Archivo', sans-serif", cursor: "pointer", boxShadow: "0 2px 8px rgba(0,0,0,0.12)",
+        } },
+        React.createElement("span", { style: { transform: "scale(0.8)", transformOrigin: "left center", width: 45, height: 29, display: "block", overflow: "hidden" } }, itemPreview(addType)),
+        addType.label.replace(/^[\u25A2\u25AD\u25EF\u25E0\u27A4]\s*/, ""),
+        React.createElement("span", { style: { color: COLORS.accent, fontSize: 11 } }, "\u25BE"));
     return (React.createElement("div", { style: {
             position: "fixed", inset: 0, display: "flex", flexDirection: "column",
             background: gridTheme === "blue" ? "#EAF1F8" : COLORS.paper, fontFamily: "'Archivo', sans-serif",
@@ -8678,7 +9109,37 @@ function IsoChantier() {
                         ...sideBtn,
                         border: `1.6px solid ${COLORS.topbar}`,
                         background: COLORS.topbar, color: "#fff",
-                    } }, "3D")),
+                    } }, "3D"),
+                React.createElement("button", { title: "Ins\u00E9rer une zone de texte", onClick: () => {
+                        if (textTool && mode === "add") {
+                            setTextTool(false);
+                            setSelFit(null);
+                            setMode("select");
+                            return;
+                        }
+                        setTextTool(true);
+                        setMode("add");
+                        setSelSeg(null);
+                        setCurrent(null);
+                        setSelDim(null);
+                        setSelElbow(null);
+                        setPendingPt(null);
+                        setSelSegCote(null);
+                        setSelFit(null);
+                        setAddCat("Autres");
+                        const tx = PALETTE.find((p) => p.type === "texte");
+                        if (tx)
+                            setAddType(tx);
+                    }, style: {
+                        ...sideBtn, display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+                        ...(textTool && mode === "add" ? { background: COLORS.accent, borderColor: COLORS.accent, color: "#fff" } : {}),
+                    } },
+                    React.createElement("span", { style: {
+                            width: 22, height: 22, border: "2px solid currentColor", borderRadius: 4,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            fontFamily: "Georgia, 'Times New Roman', serif", fontSize: 16, fontWeight: 700, lineHeight: 1,
+                            boxSizing: "border-box",
+                        } }, "T"))),
             mode === "select" && (React.createElement("button", { onClick: () => { setMulti((v) => !v); }, style: {
                     position: "absolute", left: 10, top: 10,
                     padding: "9px 14px", borderRadius: 999,
@@ -8702,40 +9163,55 @@ function IsoChantier() {
                 groupState === "grouped" ? (React.createElement("button", { style: { ...chip, padding: "8px 10px" }, onClick: ungroupSelection }, "D\u00E9grouper")) : (React.createElement("button", { style: { ...chip, padding: "8px 10px" }, onClick: groupSelection }, "Grouper")),
                 React.createElement("button", { style: { ...chip, padding: "8px 10px", borderColor: "#B3341C", color: "#B3341C" }, onClick: deleteSelection }, "\uD83D\uDDD1"),
                 React.createElement("button", { style: { ...chip, padding: "8px 10px" }, onClick: clearMulti }, "\u2715"))),
-            mode === "draw" && (React.createElement("button", { onClick: () => setCasseMode((v) => !v), style: {
-                    position: "absolute", left: 10, top: 10,
-                    padding: "9px 14px", borderRadius: 999,
-                    border: `1.6px solid ${casseMode ? COLORS.accent : COLORS.ink}`,
-                    background: casseMode ? COLORS.accent : COLORS.sheet,
-                    color: casseMode ? "#fff" : COLORS.ink,
-                    fontWeight: 700, fontSize: 12.5, fontFamily: "'Archivo', sans-serif",
-                    cursor: "pointer",
-                } }, "\u2922 Simple casse")),
-            mode === "draw" && (React.createElement("button", { onClick: () => setDoubleCasseMode((v) => !v), style: {
-                    position: "absolute", left: 10, top: 54,
-                    padding: "9px 14px", borderRadius: 999,
-                    border: `1.6px solid ${doubleCasseMode ? COLORS.accent : COLORS.ink}`,
-                    background: doubleCasseMode ? COLORS.accent : COLORS.sheet,
-                    color: doubleCasseMode ? "#fff" : COLORS.ink,
-                    fontWeight: 700, fontSize: 12.5, fontFamily: "'Archivo', sans-serif",
-                    cursor: "pointer",
-                } }, "\u2921 Double casse")),
-            mode === "draw" && doubleCasseMode && (React.createElement("button", { onClick: () => {
-                    if (helperBox) {
+            addChip,
+            // type de tracé : sélecteur compact à pictogrammes (droit / 1 casse /
+            // 2 casses) + bouton « guide » quand la double casse est active
+            mode === "draw" && (() => {
+                const kind = doubleCasseMode ? "double" : casseMode ? "simple" : "droit";
+                const setKind = (k) => {
+                    setCasseMode(k === "simple");
+                    setDoubleCasseMode(k === "double");
+                    if (k !== "double" && helperBox)
                         setHelperBox(null);
-                        return;
-                    }
-                    const origin = current && nodes[current] ? nodes[current] : { x: 0, y: 0, z: 0 };
-                    setHelperBox({ origin, sx: 3, sy: 3, sz: 3 });
-                }, style: {
-                    position: "absolute", left: 10, top: 98,
-                    padding: "9px 14px", borderRadius: 999,
-                    border: `1.6px solid ${helperBox ? COLORS.accent : COLORS.ink}`,
-                    background: helperBox ? COLORS.accent : COLORS.sheet,
-                    color: helperBox ? "#fff" : COLORS.ink,
-                    fontWeight: 700, fontSize: 12.5, fontFamily: "'Archivo', sans-serif",
-                    cursor: "pointer",
-                } }, helperBox ? "✕ Retirer le rectangle" : "▦ + Rectangle guide")),
+                };
+                const ico = (paths) => React.createElement("svg", { width: 26, height: 20, viewBox: "0 0 26 20", fill: "none", stroke: "currentColor", "stroke-width": 1.8, "stroke-linecap": "round", "stroke-linejoin": "round", style: { display: "block" } },
+                    paths.map((p, i) => React.createElement("path", { key: i, d: p.d, "stroke-dasharray": p.dash ? "2 2.5" : null, "stroke-width": p.w || null })));
+                const OPTS = [
+                    ["simple", "1 casse", [{ d: "M4 16 L22 16 L22 4", dash: true, w: 1.2 }, { d: "M4 16 L22 4" }]],
+                    ["double", "2 casses", [{ d: "M3 14 L13 18.5 L23 14 L23 5 L13 0.8 L3 5 Z", dash: true, w: 1.1 }, { d: "M3 14 L23 5" }]],
+                ];
+                return React.createElement("div", { style: { position: "absolute", left: 10, top: 10, display: "flex", gap: 6, alignItems: "stretch" } },
+                    React.createElement("div", { style: {
+                            display: "flex", background: COLORS.sheet, borderRadius: 12, padding: 3, gap: 2,
+                            border: `1.4px solid ${COLORS.gridStrong}`, boxShadow: "0 2px 8px rgba(0,0,0,0.10)",
+                        } }, OPTS.map(([k, lbl, paths]) => {
+                        const on = kind === k;
+                        return React.createElement("button", { key: k, title: k === "simple" ? "Simple casse" : "Double casse", onClick: () => setKind(on ? "droit" : k), style: {
+                                display: "flex", flexDirection: "column", alignItems: "center", gap: 1,
+                                width: 50, padding: "5px 0 4px", border: "none", borderRadius: 9, cursor: "pointer",
+                                background: on ? COLORS.accent : "transparent", color: on ? "#fff" : COLORS.ink,
+                                fontFamily: "'Archivo', sans-serif", fontSize: 9.5, fontWeight: 700,
+                                transition: "background 0.15s",
+                            } }, ico(paths), lbl);
+                    })),
+                    kind === "double" && React.createElement("button", { title: helperBox ? "Retirer le rectangle guide" : "Ajouter un rectangle guide", onClick: () => {
+                            if (helperBox) {
+                                setHelperBox(null);
+                                return;
+                            }
+                            const origin = current && nodes[current] ? nodes[current] : { x: 0, y: 0, z: 0 };
+                            setHelperBox({ origin, sx: 3, sy: 3, sz: 3 });
+                        }, style: {
+                            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1,
+                            width: 50, borderRadius: 12, cursor: "pointer", padding: "5px 0 4px",
+                            border: `1.4px solid ${helperBox ? COLORS.accent : COLORS.gridStrong}`,
+                            background: helperBox ? COLORS.accent : COLORS.sheet, color: helperBox ? "#fff" : COLORS.ink,
+                            fontFamily: "'Archivo', sans-serif", fontSize: 9.5, fontWeight: 700,
+                            boxShadow: "0 2px 8px rgba(0,0,0,0.10)",
+                        } },
+                        ico(helperBox ? [{ d: "M7 4 L19 16" }, { d: "M19 4 L7 16" }] : [{ d: "M4 5 H22 V15 H4 Z", dash: true, w: 1.3 }, { d: "M13 7 V13 M10 10 H16" }]),
+                        helperBox ? "Retirer" : "Guide"));
+            })(),
             mode === "select" && helperBox && (React.createElement("button", { onClick: () => setHelperBox(null), style: {
                     position: "absolute", left: 10, top: 98,
                     padding: "9px 14px", borderRadius: 999,
@@ -8761,150 +9237,75 @@ function IsoChantier() {
                 React.createElement("br", null),
                 React.createElement("br", null),
                 "2 doigts / molette : naviguer")),
-            mode === "add" && selectedFitting && !isTextSel && !isPenteSel && (React.createElement("div", { style: {
-                    position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: 12,
-                    display: "flex", gap: 6, background: COLORS.sheet, padding: 6,
-                    borderRadius: 999, boxShadow: "0 3px 10px rgba(0,0,0,0.2)",
-                    pointerEvents: "none",
-                } },
-                (selectedFitting.type === "te" || selectedFitting.type === "tesw" || selectedFitting.type === "teoduit") ? (React.createElement(React.Fragment, null,
-                    React.createElement("button", { style: { ...sideBtn, pointerEvents: "auto" }, onClick: () => cycleBranch(-1) }, "\u27F2"),
-                    React.createElement("button", { style: { ...sideBtn, pointerEvents: "auto" }, onClick: () => cycleBranch(1) }, "\u27F3"))) : (React.createElement(React.Fragment, null,
-                    React.createElement("button", { style: { ...sideBtn, pointerEvents: "auto" }, onClick: () => updateFit({
-                            rot: isInlineSel
-                                ? Math.round((selectedFitting.rot || 0) / 60) * 60 - 60
-                                : (selectedFitting.rot || 0) - 15
-                        }) }, "\u27F2"),
-                    React.createElement("button", { style: { ...sideBtn, pointerEvents: "auto" }, onClick: () => updateFit({
-                            rot: isInlineSel
-                                ? Math.round((selectedFitting.rot || 0) / 60) * 60 + 60
-                                : (selectedFitting.rot || 0) + 15
-                        }) }, "\u27F3"))),
-                (isStructSel || isInlineSel) && (React.createElement(React.Fragment, null,
-                    React.createElement("button", { style: { ...sideBtn, pointerEvents: "auto" }, onClick: () => updateFit({ scl: Math.min(isStructSel ? 8 : 3, (selectedFitting.scl || 1) + (isStructSel ? 0.25 : 0.15)) }) }, "\u25B2"),
-                    React.createElement("button", { style: { ...sideBtn, pointerEvents: "auto" }, onClick: () => updateFit({ scl: Math.max(isStructSel ? 0.4 : 0.5, (selectedFitting.scl || 1) - (isStructSel ? 0.2 : 0.15)) }) }, "\u25BC"))),
-                (isShapeSel || isAppareilSel) && (React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "\u2198 glisser le point pour redimensionner")),
-                React.createElement("button", { style: { ...sideBtn, borderColor: "#B3341C", color: "#B3341C", pointerEvents: "auto" }, onClick: () => removeFitting(selFit) }, "\uD83D\uDDD1"))),
             mode === "cote" && pendingPt && (React.createElement("button", { onClick: () => setPendingPt(null), style: {
                     position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: 12,
                     padding: "10px 18px", borderRadius: 999, border: "none",
                     background: COLORS.ink, color: "#fff", fontWeight: 700, fontSize: 13,
                     fontFamily: "'Archivo', sans-serif", cursor: "pointer",
                 } }, "\u2715 Annuler le premier point"))),
-        mode === "add" && (React.createElement("div", { style: {
-                background: COLORS.sheet, borderTop: `3px solid ${COLORS.accent}`,
-                padding: "8px 12px 2px", display: "flex", gap: 6, overflowX: "auto",
-                WebkitOverflowScrolling: "touch", touchAction: "pan-x",
-            } }, CATS.map((c) => {
-            const active = addCat === c;
-            return (React.createElement("button", { key: c, onClick: () => {
-                    setAddCat(c);
-                    const first = PALETTE.find((p) => p.cat === c);
-                    if (first && addType.cat !== c)
-                        setAddType(first);
-                }, style: {
-                    padding: "7px 12px", borderRadius: 999, flexShrink: 0,
-                    border: `1.4px solid ${active ? COLORS.accent : COLORS.gridStrong}`,
-                    background: active ? COLORS.accent : "transparent",
-                    color: active ? "#fff" : COLORS.cote,
-                    fontSize: 12, fontWeight: 700, fontFamily: "'Archivo', sans-serif",
-                    cursor: "pointer", whiteSpace: "nowrap",
-                } }, c));
-        }))),
-        mode === "add" && (React.createElement("div", { style: {
-                background: COLORS.sheet,
-                padding: "6px 12px 4px", display: "flex", gap: 6, overflowX: "auto",
-                WebkitOverflowScrolling: "touch", touchAction: "pan-x",
-            } }, PALETTE.filter((p) => p.cat === addCat).map((p, i) => {
-            const active = addType.type === p.type && (addType.sub || null) === (p.sub || null);
-            return (React.createElement("button", { key: i, onClick: () => setAddType(p), style: {
-                    ...chip, whiteSpace: "nowrap", flexShrink: 0,
-                    background: active ? COLORS.ink : "transparent",
-                    color: active ? COLORS.paper : COLORS.ink,
-                } }, p.label));
-        }))),
-        mode === "add" && (addType.type === "echangeur" || addType.type === "bache") && (React.createElement("div", { style: {
+        mode === "add" && !textTool && (addType.type === "echangeur" || addType.type === "bache") && (React.createElement("div", { style: {
                 background: COLORS.sheet, padding: "8px 12px",
                 display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap",
             } },
             React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "Orientation :"),
             [["X", "\u00E0 plat X"], ["Y", "\u00E0 plat Y"], ["Z", "vertical Z"]].map(([ax, lbl]) => React.createElement("button", { key: ax, style: addAxis3d === ax ? chipOn : chip, onClick: () => setAddAxis3d(ax), title: lbl }, ax)),
             React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "Z = vertical \u00B7 \u00D8/long. r\u00E9glables apr\u00E8s pose"))),
-        mode === "add" && isPenteSel && (React.createElement("div", { style: {
-                background: COLORS.sheet, padding: "10px 12px",
-                display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
-            } },
-            React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: COLORS.cote } }, "Pente :"),
-            React.createElement("input", { style: { ...field, width: 90 }, placeholder: "ex. 1,5", inputMode: "decimal", value: selectedFitting.val || "", onInput: (e) => updateFit({ val: e.target.value }) }),
-            React.createElement("span", { style: { fontSize: 14, fontWeight: 700 } }, "%"),
-            React.createElement("button", { style: { ...chip, borderColor: "#B3341C", color: "#B3341C" }, onClick: () => removeFitting(selFit) }, "\uD83D\uDDD1"))),
-        mode === "add" && isShapeSel && (React.createElement("div", { style: {
-                background: COLORS.sheet, padding: "10px 12px",
-                display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap",
-                pointerEvents: "none",
-            } },
-            React.createElement("button", { style: { ...(selectedFitting.filled ? chipOn : chip), pointerEvents: "auto" }, onClick: () => updateFit({ filled: !selectedFitting.filled }) }, selectedFitting.filled ? "Plein" : "Contour"),
-            React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "TRAIT :"),
-            [1, 2, 3.5, 5].map((w) => (React.createElement("button", { key: w, style: { ...((selectedFitting.sw || 2) === w ? chipOn : chip), pointerEvents: "auto" }, onClick: () => updateFit({ sw: w }) }, w))),
-            React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "COULEUR :"),
-            ["#232A33", "#E8600A", "#B3341C", "#1D5FA8", "#1E7A45", "#7A8394"].map((cCol) => (React.createElement("button", { key: cCol, onClick: () => updateFit({ color: cCol }), style: {
-                    width: 26, height: 26, borderRadius: "50%", background: cCol,
-                    border: (selectedFitting.color || COLORS.ink) === cCol
-                        ? `3px solid ${COLORS.accent}` : `1.5px solid ${COLORS.gridStrong}`,
-                    cursor: "pointer", flexShrink: 0, pointerEvents: "auto",
-                } }))),
-            React.createElement("button", { style: { ...chip, borderColor: "#B3341C", color: "#B3341C", pointerEvents: "auto" }, onClick: () => removeFitting(selFit) }, "\uD83D\uDDD1"))),
-        mode === "add" && isTextSel && (React.createElement("div", { style: {
-                background: COLORS.sheet, padding: "10px 12px",
-                display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap",
-            } },
-            React.createElement("input", { type: "text", value: selectedFitting.text || "", onInput: (e) => updateFit({ text: e.target.value }), placeholder: "Votre texte\u2026", style: { ...field, width: 160, flexGrow: 1 } }),
-            React.createElement("button", { style: sideBtn, onClick: () => updateFit({ size: Math.min(40, (selectedFitting.size || 13) + 2) }) }, "A+"),
-            React.createElement("button", { style: { ...sideBtn, fontSize: 12 }, onClick: () => updateFit({ size: Math.max(7, (selectedFitting.size || 13) - 2) }) }, "A\u2212"),
-            React.createElement("button", { style: selectedFitting.bold ? chipOn : chip, onClick: () => updateFit({ bold: !selectedFitting.bold }) },
-                React.createElement("b", null, "G")),
-            React.createElement("button", { style: selectedFitting.italic ? chipOn : chip, onClick: () => updateFit({ italic: !selectedFitting.italic }) },
-                React.createElement("i", null, "I")),
-            React.createElement("button", { style: selectedFitting.hl ? chipOn : chip, onClick: () => updateFit({ hl: !selectedFitting.hl }) }, "Surligner"),
-            React.createElement("button", { style: { ...chip, borderColor: "#B3341C", color: "#B3341C" }, onClick: () => removeFitting(selFit) }, "\uD83D\uDDD1"))),
-        mode === "add" && !isTextSel && (React.createElement("div", { style: {
-                background: COLORS.sheet, padding: "4px 12px 8px",
-                fontSize: 11.5, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace",
-            } }, "Toucher : poser \u00B7 glisser : d\u00E9placer \u00B7 2 doigts / molette : naviguer")),
-        mode === "cote" && !dim && (React.createElement("div", { style: {
-                background: COLORS.sheet, borderTop: `3px solid ${COLORS.accent}`,
-                padding: "10px 14px", fontSize: 12, color: COLORS.cote,
-                fontFamily: "'IBM Plex Mono', monospace",
-            } }, pendingPt
-            ? "Touchez le deuxième point — la cote s'alignera sur l'axe iso le plus proche"
-            : "Touchez deux points à coter (soudure, organe, tube, mur, sol…) ou une cote existante")),
         dim && mode === "cote" && (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
             React.createElement("span", { style: { fontWeight: 800, fontSize: 13, letterSpacing: 1 } }, "COTE"),
             React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Valeur (mm)", width: 100, autoFocus: true, value: dim.value || "", onInput: (e) => updateDim({ value: e.target.value ? +e.target.value : null }), hidden: !!dim.hidden, onToggleHidden: dim.value != null ? () => updateDim({ hidden: !dim.hidden }) : null }),
             React.createElement("button", { style: chip, onClick: () => updateDim({ flip: !dim.flip }) }, "\u21C4"),
-            React.createElement("button", { style: chip, onClick: () => updateDim({ off: Math.max(10, dim.off - 8) }) }, "+"),
-            React.createElement("button", { style: chip, onClick: () => updateDim({ off: Math.min(90, dim.off + 8) }) }, "\u2212"),
-            React.createElement("button", { onClick: removeDim, style: { ...chip, borderColor: "#B3341C", color: "#B3341C" } }, "Suppr."))),
-        selectedFitting && mode === "select" && (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: {
+            React.createElement("button", { style: chip, onClick: () => updateDim({ extAlt: !dim.extAlt }) }, "\u2195"),
+            React.createElement("button", { style: chip, onClick: () => updateDim({ off: Math.max(-40, (dim.off || 0) - 10) }) }, "+"),
+            React.createElement("button", { style: chip, onClick: () => updateDim({ off: Math.min(120, (dim.off || 0) + 10) }) }, "\u2212"),
+            React.createElement("button", { onClick: removeDim, style: { ...chip, marginLeft: "auto", borderColor: "#B3341C", color: "#B3341C" } }, "Supprimer"))),
+        mode === "add" && textTool && (React.createElement("div", { style: {
+                background: COLORS.sheet, borderTop: `3px solid ${COLORS.accent}`,
+                padding: "10px 12px calc(10px + 0px)", display: "flex", flexDirection: "column", gap: 8,
+            } }, isTextSel ? (React.createElement(React.Fragment, null,
+            React.createElement("input", { type: "text", value: selectedFitting.text || "", onInput: (e) => updateFit({ text: e.target.value }), placeholder: "Votre texte\u2026", style: { ...field } }),
+            React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+                React.createElement("button", { style: { ...(selectedFitting.bold ? chipOn : chip), minWidth: 40 }, onClick: () => updateFit({ bold: !selectedFitting.bold }) },
+                    React.createElement("b", null, "G")),
+                React.createElement("button", { style: { ...(selectedFitting.italic ? chipOn : chip), minWidth: 40 }, onClick: () => updateFit({ italic: !selectedFitting.italic }) },
+                    React.createElement("i", null, "I")),
+                React.createElement("button", { style: { ...(selectedFitting.ul ? chipOn : chip), minWidth: 40 }, onClick: () => updateFit({ ul: !selectedFitting.ul }) },
+                    React.createElement("u", null, "S")),
+                React.createElement(ColorSwatch, { title: "Couleur du texte", value: selectedFitting.color || COLORS.ink, onChange: (col) => updateFit({ color: col }) }),
+                React.createElement("span", { style: { width: 1, height: 26, background: COLORS.gridStrong, margin: "0 2px" } }),
+                React.createElement("button", { style: { ...sideBtn, fontSize: 12 }, onClick: () => updateFit({ size: Math.max(7, (selectedFitting.size || 13) - 2) }) }, "A\u2212"),
+                React.createElement("span", { style: { minWidth: 26, textAlign: "center", fontSize: 13, fontWeight: 700, color: COLORS.cote } }, selectedFitting.size || 13),
+                React.createElement("button", { style: sideBtn, onClick: () => updateFit({ size: Math.min(40, (selectedFitting.size || 13) + 2) }) }, "A+"),
+                React.createElement("button", { style: { ...chip, marginLeft: "auto", borderColor: "#B3341C", color: "#B3341C" }, onClick: () => removeFitting(selFit) }, "\uD83D\uDDD1"))))
+            : (React.createElement("span", { style: { fontSize: 12.5, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "Touchez le plan pour placer une zone de texte")))),
+        selectedFitting && (mode === "select" || (mode === "add" && !textTool)) && (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: {
                 display: "flex", flexDirection: "column", gap: 10,
                 maxHeight: "48vh", overflowY: "auto",
             } },
-            React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontWeight: 800, fontSize: 13, letterSpacing: 1 } }, fitLabel(selectedFitting).toUpperCase()),
-                (selectedFitting.type === "te" || selectedFitting.type === "tesw" || selectedFitting.type === "teoduit") ? (React.createElement(React.Fragment, null,
-                    React.createElement("button", { style: sideBtn, onClick: () => cycleBranch(-1) }, "\u27F2"),
-                    React.createElement("button", { style: sideBtn, onClick: () => cycleBranch(1) }, "\u27F3"))) : (selectedFitting.type === "echangeur" || selectedFitting.type === "bache") ? (React.createElement(React.Fragment, null,
-                    React.createElement("span", { style: { fontSize: 11, color: COLORS.cote } }, "Orientation :"),
-                    [["X", "\u00E0 plat X"], ["Y", "\u00E0 plat Y"], ["Z", "vertical Z"]].map(([ax, lbl]) => React.createElement("button", { key: ax, style: (selectedFitting.axis3d || "X") === ax ? chipOn : chip, onClick: () => updateFit({ axis3d: ax }), title: lbl }, ax)),
-                    React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "Z = vertical"))) : (React.createElement(React.Fragment, null,
-                    React.createElement("button", { style: sideBtn, onClick: () => updateFit({
+            React.createElement("span", { style: { fontWeight: 800, fontSize: 12, letterSpacing: 1, color: COLORS.cote, marginBottom: -4 } }, fitLabel(selectedFitting).toUpperCase()),
+            // toutes les options sur une seule ligne (boutons compacts)
+            React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap", overflowX: "auto", WebkitOverflowScrolling: "touch" } },
+(WORI_TYPES.has(selectedFitting.type) && perpAxesFor(selectedFitting)) ? (() => {
+                    const pa = perpAxesFor(selectedFitting);
+                    const AX = ["X", "Y", "Z"];
+                    const opts = [[0, AX[pa.p]], [1, AX[pa.o]]];
+                    const isBride = selectedFitting.type === "bride" || selectedFitting.type === "bridesimple";
+                    const rev = Math.abs(((selectedFitting.rot || 0) % 360 + 360) % 360 - 180) < 1;
+                    return React.createElement(React.Fragment, null,
+                        opts.map(([v, lbl]) => React.createElement("button", { key: v, style: (selectedFitting.wOri || 0) === v ? cbOn : cb, onClick: () => updateFit({ wOri: v, rot: isBride ? 0 : (rev ? 180 : 0) }), title: "Trait suivant l'axe " + lbl }, lbl)),
+                        !isBride && React.createElement("button", { style: rev ? cbOn : cb, title: "Inverser le sens", onClick: () => updateFit({ rot: rev ? 0 : 180 }) }, "\u21C4"));
+                })() : (selectedFitting.type === "te" || selectedFitting.type === "tesw" || selectedFitting.type === "teoduit") ? (React.createElement(React.Fragment, null,
+                    React.createElement("button", { style: cb, onClick: () => cycleBranch(-1) }, "\u27F2"),
+                    React.createElement("button", { style: cb, onClick: () => cycleBranch(1) }, "\u27F3"))) : (selectedFitting.type === "echangeur" || selectedFitting.type === "bache") ? (React.createElement(React.Fragment, null,
+                    [["X", "\u00E0 plat X"], ["Y", "\u00E0 plat Y"], ["Z", "vertical Z"]].map(([ax, lbl]) => React.createElement("button", { key: ax, style: (selectedFitting.axis3d || "X") === ax ? cbOn : cb, onClick: () => updateFit({ axis3d: ax }), title: lbl }, ax)),
+                    null)) : selectedFitting.type === "soudure" ? null : (React.createElement(React.Fragment, null,
+                    React.createElement("button", { style: cb, onClick: () => updateFit({
                             rot: isInlineSel
                                 ? Math.round((selectedFitting.rot || 0) / 60) * 60 - 60
                                 : isAppareilSel
                                     ? Math.round((selectedFitting.rot || 0) / 90) * 90 - 90
                                     : (selectedFitting.rot || 0) - 15
                         }) }, "\u27F2"),
-                    React.createElement("button", { style: sideBtn, onClick: () => updateFit({
+                    React.createElement("button", { style: cb, onClick: () => updateFit({
                             rot: isInlineSel
                                 ? Math.round((selectedFitting.rot || 0) / 60) * 60 + 60
                                 : isAppareilSel
@@ -8912,12 +9313,11 @@ function IsoChantier() {
                                     : (selectedFitting.rot || 0) + 15
                         }) }, "\u27F3"))),
                 (isStructSel || isInlineSel) && (React.createElement(React.Fragment, null,
-                    React.createElement("button", { style: sideBtn, onClick: () => updateFit({ scl: Math.min(isStructSel ? 8 : 3, (selectedFitting.scl || 1) + (isStructSel ? 0.25 : 0.15)) }) }, "\u25B2"),
-                    React.createElement("button", { style: sideBtn, onClick: () => updateFit({ scl: Math.max(isStructSel ? 0.4 : 0.5, (selectedFitting.scl || 1) - (isStructSel ? 0.2 : 0.15)) }) }, "\u25BC"))),
-                (isShapeSel || isAppareilSel) && (React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "\u2198 glisser le point pour redimensionner")),
+                    React.createElement("button", { style: cb, onClick: () => updateFit({ scl: Math.min(isStructSel ? 8 : 3, (selectedFitting.scl || 1) + (isStructSel ? 0.25 : 0.15)) }) }, "\u25B2"),
+                    React.createElement("button", { style: cb, onClick: () => updateFit({ scl: Math.max(isStructSel ? 0.4 : 0.5, (selectedFitting.scl || 1) - (isStructSel ? 0.2 : 0.15)) }) }, "\u25BC"))),
                 React.createElement(ColorSwatch, { title: "Couleur", value: selectedFitting.color || (isStructSel ? COLORS.structure : COLORS.ink), onChange: (c) => updateFit({ color: c }) }),
-                React.createElement("button", { style: { ...chip, marginLeft: "auto" }, onClick: () => duplicateSelection([], [selFit]) }, "Dupliquer"),
-                React.createElement("button", { onClick: () => removeFitting(selFit), style: { ...chip, borderColor: "#B3341C", color: "#B3341C" } }, "Supprimer")),
+                React.createElement("button", { title: "Dupliquer", "aria-label": "Dupliquer", style: { ...cb, marginLeft: "auto", fontSize: 20 }, onClick: () => duplicateSelection([], [selFit]) }, "+"),
+                React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: () => removeFitting(selFit), style: { ...cb, fontSize: 20, borderColor: "#B3341C", color: "#B3341C" } }, "\u2212")),
             selectedFitting.type === "teoduit" && (React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
                 React.createElement("span", { style: { fontSize: 12, color: COLORS.cote } }, "DN du piquage r\u00E9duit :"),
                 React.createElement("select", { value: selectedFitting.branchDn || "", onInput: (e) => updateFit({ branchDn: e.target.value ? +e.target.value : null }), style: { padding: "8px 10px", borderRadius: 8, border: `1.4px solid ${COLORS.ink}`, fontSize: 16, background: "#fff" } },
@@ -8944,8 +9344,20 @@ function IsoChantier() {
                     React.createElement("b", null, "G")),
                 React.createElement("button", { style: selectedFitting.italic ? chipOn : chip, onClick: () => updateFit({ italic: !selectedFitting.italic }) },
                     React.createElement("i", null, "I")),
+                React.createElement("button", { style: selectedFitting.ul ? chipOn : chip, onClick: () => updateFit({ ul: !selectedFitting.ul }) },
+                    React.createElement("u", null, "S")),
                 React.createElement("button", { style: selectedFitting.hl ? chipOn : chip, onClick: () => updateFit({ hl: !selectedFitting.hl }) }, "Surligner"))),
-            React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "Pour d\u00E9placer cet \u00E9l\u00E9ment, passez en mode \u2795 Ajouter et glissez-le"))),
+            isShapeSel && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+                React.createElement("button", { style: selectedFitting.filled ? chipOn : chip, onClick: () => updateFit({ filled: !selectedFitting.filled }) }, selectedFitting.filled ? "Plein" : "Contour"),
+                React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "TRAIT :"),
+                [0.5, 1, 2, 3.5, 5].map((w) => (React.createElement("button", { key: w, style: (selectedFitting.sw || 2) === w ? chipOn : chip, onClick: () => updateFit({ sw: w }) }, String(w).replace(".", ",")))))),
+            isShapeSel && selectedFitting.shape === "fleche" && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+                React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "FL\u00C8CHE :"),
+                [[1, "Fine"], [2, "Moyenne"], [3, "Standard"]].map(([v, lbl]) => (React.createElement("button", { key: v, style: (selectedFitting.ath || 3) === v ? chipOn : chip, onClick: () => updateFit({ ath: v }) }, lbl))))),
+            isPenteSel && (React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+                React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: COLORS.cote } }, "Pente :"),
+                React.createElement("input", { style: { ...field, width: 90 }, placeholder: "ex. 1,5", inputMode: "decimal", value: selectedFitting.val || "", onInput: (e) => updateFit({ val: e.target.value }) }),
+                React.createElement("span", { style: { fontSize: 14, fontWeight: 700 } }, "%"))))),
         elbowSel && !selectedFitting && mode === "select" && (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
             React.createElement("span", { style: { fontWeight: 800, fontSize: 13, letterSpacing: 1 } },
                 "COUDE (",
@@ -8971,7 +9383,7 @@ function IsoChantier() {
                 const angle = elbowModSel.angle || elbowSel.geoAng;
                 const nps = dn ? DN_NPS[dn] : null;
                 if (!nps || !angle) {
-                    return (React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace", width: "100%" } }, "Renseignez le DN du tube pour afficher l'encombrement 3D / 5D"));
+                    return null;
                 }
                 const t = Math.tan((angle * Math.PI) / 360);
                 const enc3 = (1.5 * nps * 25.4 * t).toFixed(1).replace(".", ",");
@@ -8989,8 +9401,7 @@ function IsoChantier() {
                     " mm \u00B7 5D : ",
                     enc5,
                     " mm"));
-            })(),
-            React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace", width: "100%" } }, "Angle modifi\u00E9 \u2192 hachures automatiques \u00B7 la corde se cote entre les deux tubes"))),
+            })())),
         selDim && mode === "select" && !seg && (() => {
             const d = freeDims.find((x) => x.id === selDim);
             if (!d)
@@ -9004,7 +9415,7 @@ function IsoChantier() {
                 React.createElement("button", { style: chip, onClick: () => updateDim({ off: Math.min(120, (d.off || 0) + 10) }) }, "\u2212"),
                 React.createElement("button", { style: { ...chip, marginLeft: "auto", borderColor: "#B3341C", color: "#B3341C" }, onClick: () => { setFreeDims((dd) => dd.filter((x) => x.id !== selDim)); setSelDim(null); } }, "Supprimer")));
         })(),
-        selSegCote && mode === "select" && (() => {
+        selSegCote && (mode === "select" || mode === "cote") && (() => {
             const s = segments.find((x) => x.id === selSegCote);
             if (!s || !s.cote)
                 return null;
@@ -9026,8 +9437,7 @@ function IsoChantier() {
                     React.createElement("button", { style: chip, onClick: () => setSC({ extAlt: !s.extAlt }) }, "\u2195"),
                     React.createElement("button", { style: chip, onClick: () => setSC({ coff: Math.max(-12, (s.coff || 0) - 8) }) }, "Rapprocher"),
                     React.createElement("button", { style: chip, onClick: () => setSC({ coff: Math.min(80, (s.coff || 0) + 8) }) }, "\u00C9loigner"),
-                    (s.tox || s.toy) ? (React.createElement("button", { style: chip, onClick: () => setSC({ tox: 0, toy: 0 }) }, "Texte au centre")) : null),
-                React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "Astuce : le chiffre se d\u00E9place aussi au doigt directement sur le dessin")));
+                    (s.tox || s.toy) ? (React.createElement("button", { style: chip, onClick: () => setSC({ tox: 0, toy: 0 }) }, "Texte au centre")) : null)));
         })(),
         seg && !elbowSel && !selectedFitting && mode === "select" && (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: {
                 display: "flex", flexDirection: "column", gap: 10,
@@ -9045,8 +9455,15 @@ function IsoChantier() {
                 React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Cote (mm)", width: 100, value: seg.cote || "", onInput: (e) => updateSeg({ cote: e.target.value ? +e.target.value : null }), hidden: !!seg.coteHidden, onToggleHidden: seg.cote != null ? () => updateSeg({ coteHidden: !seg.coteHidden }) : null }),
                 React.createElement(TextField, { placeholder: "Nom tron\u00E7on", width: 130, value: seg.name || "", onInput: (e) => updateSeg({ name: e.target.value || null }), hidden: !!seg.nameHidden, onToggleHidden: seg.name ? () => updateSeg({ nameHidden: !seg.nameHidden }) : null }),
                 React.createElement(ColorSwatch, { title: "Couleur du tube", value: seg.color || COLORS.pipe, onChange: (c) => updateSeg({ color: c }) }),
-                React.createElement("button", { style: { ...chip, marginLeft: "auto" }, onClick: () => duplicateSelection([selSeg], []) }, "Dupliquer"),
-                React.createElement("button", { onClick: deleteSeg, style: { ...chip, borderColor: "#B3341C", color: "#B3341C" } }, "Supprimer")),
+                React.createElement("button", { title: "Dupliquer", "aria-label": "Dupliquer", style: { ...chip, marginLeft: "auto", minWidth: 46, fontSize: 20, lineHeight: 1, padding: "7px 12px" }, onClick: () => duplicateSelection([selSeg], []) }, "+"),
+                React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: deleteSeg, style: { ...chip, minWidth: 46, fontSize: 20, lineHeight: 1, padding: "7px 12px", borderColor: "#B3341C", color: "#B3341C" } }, "\u2212")),
+            seg.cote != null && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+                React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "COTE :"),
+                React.createElement("button", { style: chip, onClick: () => updateSeg({ flip: !seg.flip }) }, "\u21C4"),
+                React.createElement("button", { style: chip, onClick: () => updateSeg({ extAlt: !seg.extAlt }) }, "\u2195"),
+                React.createElement("button", { style: chip, onClick: () => updateSeg({ coff: Math.max(-12, (seg.coff || 0) - 8) }) }, "Rapprocher"),
+                React.createElement("button", { style: chip, onClick: () => updateSeg({ coff: Math.min(80, (seg.coff || 0) + 8) }) }, "\u00C9loigner"),
+                (seg.tox || seg.toy) ? (React.createElement("button", { style: chip, onClick: () => updateSeg({ tox: 0, toy: 0 }) }, "Texte au centre")) : null)),
             (() => {
                 const P = nodes[seg.a], Q = nodes[seg.b];
                 if (!P || !Q || seg.casse)
@@ -9092,13 +9509,6 @@ function IsoChantier() {
                 segFreeEnd(seg) ? (React.createElement(React.Fragment, null,
                     React.createElement("button", { style: chip, onClick: () => stretchSeg(1) }, "\uFF0B"),
                     React.createElement("button", { style: chip, onClick: () => stretchSeg(-1) }, "\u2212"))) : (React.createElement("span", { style: { fontSize: 11.5, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "raccord\u00E9 aux deux bouts \u2014 in\u00E9tirable"))),
-            seg.cote && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "COTE :"),
-                React.createElement("button", { style: chip, onClick: () => updateSeg({ flip: !seg.flip }) }, "\u21C4"),
-                React.createElement("button", { style: chip, onClick: () => updateSeg({ coff: Math.max(-12, (seg.coff || 0) - 8) }) }, "Rapprocher"),
-                React.createElement("button", { style: chip, onClick: () => updateSeg({ coff: Math.min(80, (seg.coff || 0) + 8) }) }, "\u00C9loigner"),
-                (seg.tox || seg.toy) ? (React.createElement("button", { style: chip, onClick: () => updateSeg({ tox: 0, toy: 0 }) }, "Texte au centre")) : null,
-                React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace", width: "100%" } }, "Astuce : le chiffre de la cote se d\u00E9place au doigt directement sur le dessin"))),
             seg.casse && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
                 React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "RATTRAPAGES :"),
                 !seg.casse.axis1 && React.createElement("button", { style: chip, onClick: cycleCasseCorner }, "\u27F3 Sens du triangle"),
@@ -9258,17 +9668,48 @@ function IsoChantier() {
                 React.createElement("button", { onClick: () => removeFitting(f.id), style: {
                         border: "none", background: "none", color: "#B3341C", fontWeight: 800, cursor: "pointer", fontSize: 13,
                     } }, "\u2715")))))))),
-        React.createElement("div", { style: {
-                display: "flex", gap: 4,
-                padding: "8px calc(10px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(10px + env(safe-area-inset-left))",
-                background: COLORS.paper, borderTop: `1.4px solid ${COLORS.gridStrong}`, flexShrink: 0,
-            } },
-            React.createElement("button", { style: btn(mode === "draw"), onClick: () => { setMode("draw"); setSelSeg(null); setSelFit(null); setSelDim(null); setSelElbow(null); setPendingPt(null); setSelSegCote(null); } }, "\u270F\uFE0F Trac\u00E9"),
-            React.createElement("button", { style: btn(mode === "add"), onClick: () => { setMode("add"); setSelSeg(null); setCurrent(null); setSelDim(null); setSelElbow(null); setPendingPt(null); setSelSegCote(null); } }, "\u2795 Ajouter"),
-            React.createElement("button", { style: btn(mode === "select"), onClick: () => { setMode("select"); setCurrent(null); setSelFit(null); setSelDim(null); setPendingPt(null); clearMulti(); setSelSegCote(null); } }, "\u261D\uFE0F S\u00E9lect."),
-            React.createElement("button", { style: btn(mode === "cote"), onClick: () => { setMode("cote"); setSelSeg(null); setCurrent(null); setSelFit(null); setSelElbow(null); setSelSegCote(null); } }, "\uD83D\uDCCF Coter")),
+        (() => {
+            // barre des modes « Bande Monteiro » : onglet surélevé qui glisse
+            // sous le mode actif, pastille orange derrière son pictogramme
+            const MODES = ["draw", "add", "select", "cote"];
+            const idx = Math.max(0, MODES.indexOf(mode));
+            const mb = (m, label, onClick) => {
+                const on = mode === m;
+                return React.createElement("button", { onClick: onClick, style: {
+                        flex: 1, position: "relative", zIndex: 1, display: "flex", flexDirection: "column",
+                        alignItems: "center", justifyContent: "center", gap: 3, padding: "10px 0 8px",
+                        border: "none", background: "transparent", cursor: "pointer",
+                        color: on ? "#fff" : "rgba(242,240,234,0.6)",
+                        fontFamily: "'Archivo', sans-serif", fontSize: 11.5, fontWeight: on ? 700 : 600,
+                        transition: "color 0.2s", WebkitTapHighlightColor: "transparent",
+                    } },
+                    React.createElement("span", { style: { display: "block", transform: on ? "translateY(-9px)" : "none", transition: "transform 0.28s cubic-bezier(0.3,1.3,0.5,1)" } },
+                        React.createElement(ModeIcon, { name: m, size: 22 })),
+                    React.createElement("span", { style: { transform: on ? "translateY(-2px)" : "none", transition: "transform 0.28s" } }, label));
+            };
+            return React.createElement("div", { style: {
+                    background: COLORS.topbar, flexShrink: 0, position: "relative", zIndex: 3,
+                    padding: "0 calc(6px + env(safe-area-inset-right)) env(safe-area-inset-bottom) calc(6px + env(safe-area-inset-left))",
+                } },
+                React.createElement("div", { style: { position: "relative", display: "flex" } },
+                    React.createElement("span", { "aria-hidden": "true", style: {
+                            position: "absolute", zIndex: 0, top: -10, bottom: 0,
+                            left: `calc(${idx * 25}% + 4px)`, width: "calc(25% - 8px)",
+                            borderRadius: "12px 12px 0 0", background: COLORS.topbar,
+                            transition: "left 0.34s cubic-bezier(0.3,1.3,0.5,1)",
+                        } },
+                        React.createElement("span", { style: {
+                                position: "absolute", left: "50%", top: 5, width: 36, height: 36, marginLeft: -18,
+                                borderRadius: "50%", background: COLORS.accent,
+                            } })),
+                    mb("draw", "Trac\u00E9", () => { setMode("draw"); setSelSeg(null); setSelFit(null); setSelDim(null); setSelElbow(null); setPendingPt(null); setSelSegCote(null); }),
+                    mb("add", "Ajouter", (e) => { setMode("add"); setSelSeg(null); setCurrent(null); setSelDim(null); setSelElbow(null); setPendingPt(null); setSelSegCote(null); setTextTool(false); openCatMenu(e.currentTarget); }),
+                    mb("select", "S\u00E9lect.", () => { setMode("select"); setCurrent(null); setSelFit(null); setSelDim(null); setPendingPt(null); clearMulti(); setSelSegCote(null); }),
+                    mb("cote", "Coter", () => { setMode("cote"); setSelSeg(null); setCurrent(null); setSelFit(null); setSelElbow(null); setSelSegCote(null); })));
+        })(),
         settingsMenu,
         toolsMenu,
+        catPopup,
         showPlans && (React.createElement("div", { onClick: () => setShowPlans(false), style: {
                 position: "fixed", inset: 0, background: "rgba(20,25,32,0.55)",
                 display: "flex", alignItems: "flex-end", zIndex: 20,
@@ -9283,7 +9724,7 @@ function IsoChantier() {
                     React.createElement("span", { style: { fontWeight: 800, letterSpacing: 1.5, fontSize: 14 } }, "PLANS"),
                     saveMsg && React.createElement("span", { style: { color: "#2E7D32", fontSize: 13, fontWeight: 700 } }, saveMsg),
                     React.createElement("button", { style: { ...chip, marginLeft: "auto" }, onClick: newPlan }, "+ Nouveau plan")),
-                React.createElement("div", { style: { fontSize: 11.5, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "Les plans restent en m\u00E9moire tant que l'appli est ouverte. Exportez un fichier .json pour conserver / partager un plan, puis r\u00E9-importez-le \u00E0 la prochaine visite."),
+                React.createElement("div", { style: { fontSize: 11.5, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "Les plans enregistr\u00E9s restent sur cet appareil. Exportez un fichier .json pour les sauvegarder ailleurs ou les partager."),
                 React.createElement("div", { style: { display: "flex", gap: 8 } },
                     React.createElement("input", { style: { ...field, flex: 1 }, placeholder: "Nom du plan (ex : Local TGBT \u2014 Tranche 2)", value: planName, onInput: (e) => setPlanName(e.target.value) }),
                     React.createElement("button", { style: chipOn, onClick: savePlan }, "\uD83D\uDCBE Enregistrer")),
