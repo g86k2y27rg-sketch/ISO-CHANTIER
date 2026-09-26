@@ -5320,6 +5320,24 @@ function IsoChantier() {
         }
         if (bestN && bdN < 24)
             return { type: "node", id: bestN };
+        // reprise d'un tracé : une extrémité libre (fin de ligne) a une
+        // tolérance plus large — un tap un peu à côté ne doit pas créer un
+        // point neuf à z=0 qui, à cause de l'ambiguïté iso, peut se trouver
+        // loin en 3D tout en paraissant collé au bout de la ligne
+        let bestE = null, bdE = 1e9;
+        for (const k of Object.keys(nodes)) {
+            const deg = segments.reduce((c, s) => c + (s.a === k || s.b === k ? 1 : 0), 0);
+            if (deg > 1)
+                continue;
+            const sN = proj(nodes[k]);
+            const d = Math.hypot(sN.x - screenPt.x, sN.y - screenPt.y);
+            if (d < bdE) {
+                bdE = d;
+                bestE = k;
+            }
+        }
+        if (bestE && bdE < 44)
+            return { type: "node", id: bestE };
         let bestS = null, bdS = 1e9, bestT = 0.5;
         for (const s of segments) {
             const A = proj(nodes[s.a]), B = proj(nodes[s.b]);
@@ -5338,6 +5356,13 @@ function IsoChantier() {
                 z: Math.round(A3.z + bestT * (B3.z - A3.z)),
             };
             return { type: "split", segId: bestS.id, point, t: bestT };
+        }
+        // point neuf : même altitude que le nœud le plus proche à l'écran
+        // (sinon z=0 par défaut, qui peut tomber très loin en 3D)
+        if (bestN && bdN < 120) {
+            const zN = nodes[bestN].z;
+            const q = unprojAtZ(screenPt.x, screenPt.y, zN);
+            return { type: "new", point: { x: Math.round(q.x), y: Math.round(q.y), z: zN } };
         }
         return { type: "new", point: unproj(screenPt.x, screenPt.y) };
     };
@@ -5362,6 +5387,12 @@ function IsoChantier() {
             return;
         }
         const cur = nodes[current];
+        // re-tap sur le point courant lui-même : rien à tracer
+        {
+            const sc = proj(cur);
+            if (Math.hypot(sc.x - pt.x, sc.y - pt.y) < 14)
+                return;
+        }
         let best = null, bd = 1e9;
         // Priorité : un nœud existant (d'un autre tracé) visuellement proche
         // du point tapé -> on s'y raccorde directement, même si le chemin
@@ -5379,6 +5410,28 @@ function IsoChantier() {
                 bdDirect = dD;
                 directNode = k;
             }
+        }
+        // point de départ isolé (aucun tronçon) + tap sur un nœud existant :
+        // c'est une reprise de tracé ratée de peu → on déplace le départ
+        // sur ce nœud au lieu de créer un tronçon oblique parasite
+        const curIsolated = !segments.some((s) => s.a === current || s.b === current);
+        if (directNode && bdDirect < 22 && curIsolated) {
+            const orphan = current;
+            setNodes((n) => { const c = { ...n }; delete c[orphan]; return c; });
+            setCurrent(directNode);
+            return;
+        }
+        // nœud déjà relié au point courant : on s'y place sans doubler le tube
+        if (directNode && bdDirect < 22 && segments.some((s) => (s.a === current && s.b === directNode) || (s.b === current && s.a === directNode))) {
+            setCurrent(directNode);
+            return;
+        }
+        // un raccord direct sur 3 axes à la fois n'a de sens qu'en double casse
+        if (directNode && bdDirect < 22 && !doubleCasseMode) {
+            const dn3 = nodes[directNode];
+            const nz = (dn3.x !== cur.x ? 1 : 0) + (dn3.y !== cur.y ? 1 : 0) + (dn3.z !== cur.z ? 1 : 0);
+            if (nz > 2)
+                directNode = null;
         }
         if (directNode && bdDirect < 22) {
             best = nodes[directNode];
@@ -9243,21 +9296,20 @@ function IsoChantier() {
                     background: COLORS.ink, color: "#fff", fontWeight: 700, fontSize: 13,
                     fontFamily: "'Archivo', sans-serif", cursor: "pointer",
                 } }, "\u2715 Annuler le premier point"))),
-        mode === "add" && !textTool && (addType.type === "echangeur" || addType.type === "bache") && (React.createElement("div", { style: {
+        mode === "add" && !textTool && !selectedFitting && (addType.type === "echangeur" || addType.type === "bache") && (React.createElement("div", { style: {
                 background: COLORS.sheet, padding: "8px 12px",
                 display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap",
             } },
             React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "Orientation :"),
             [["X", "\u00E0 plat X"], ["Y", "\u00E0 plat Y"], ["Z", "vertical Z"]].map(([ax, lbl]) => React.createElement("button", { key: ax, style: addAxis3d === ax ? chipOn : chip, onClick: () => setAddAxis3d(ax), title: lbl }, ax)),
             React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "Z = vertical \u00B7 \u00D8/long. r\u00E9glables apr\u00E8s pose"))),
-        dim && mode === "cote" && (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
-            React.createElement("span", { style: { fontWeight: 800, fontSize: 13, letterSpacing: 1 } }, "COTE"),
-            React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Valeur (mm)", width: 100, autoFocus: true, value: dim.value || "", onInput: (e) => updateDim({ value: e.target.value ? +e.target.value : null }), hidden: !!dim.hidden, onToggleHidden: dim.value != null ? () => updateDim({ hidden: !dim.hidden }) : null }),
-            React.createElement("button", { style: chip, onClick: () => updateDim({ flip: !dim.flip }) }, "\u21C4"),
-            React.createElement("button", { style: chip, onClick: () => updateDim({ extAlt: !dim.extAlt }) }, "\u2195"),
-            React.createElement("button", { style: chip, onClick: () => updateDim({ off: Math.max(-40, (dim.off || 0) - 10) }) }, "+"),
-            React.createElement("button", { style: chip, onClick: () => updateDim({ off: Math.min(120, (dim.off || 0) + 10) }) }, "\u2212"),
-            React.createElement("button", { onClick: removeDim, style: { ...chip, marginLeft: "auto", borderColor: "#B3341C", color: "#B3341C" } }, "Supprimer"))),
+        dim && mode === "cote" && (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: { display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap" } },
+            React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Cote (mm)", width: 104, autoFocus: true, value: dim.value || "", onInput: (e) => updateDim({ value: e.target.value ? +e.target.value : null }), hidden: !!dim.hidden, onToggleHidden: dim.value != null ? () => updateDim({ hidden: !dim.hidden }) : null }),
+            React.createElement("button", { style: cb, title: "Changer de c\u00F4t\u00E9", onClick: () => updateDim({ flip: !dim.flip }) }, "\u21C4"),
+            React.createElement("button", { style: cb, title: "Autre ligne d'attache", onClick: () => updateDim({ extAlt: !dim.extAlt }) }, "\u2195"),
+            React.createElement("button", { style: { ...cb, fontSize: 18 }, title: "\u00C9loigner", onClick: () => updateDim({ off: Math.min(120, (dim.off || 0) + 10) }) }, "+"),
+            React.createElement("button", { style: { ...cb, fontSize: 18 }, title: "Rapprocher", onClick: () => updateDim({ off: Math.max(-40, (dim.off || 0) - 10) }) }, "\u2212"),
+            React.createElement("button", { onClick: removeDim, title: "Supprimer", "aria-label": "Supprimer", style: { ...cb, marginLeft: "auto", borderColor: "#B3341C", color: "#B3341C" } }, "\u2715"))),
         mode === "add" && textTool && (React.createElement("div", { style: {
                 background: COLORS.sheet, borderTop: `3px solid ${COLORS.accent}`,
                 padding: "10px 12px calc(10px + 0px)", display: "flex", flexDirection: "column", gap: 8,
@@ -9317,7 +9369,7 @@ function IsoChantier() {
                     React.createElement("button", { style: cb, onClick: () => updateFit({ scl: Math.max(isStructSel ? 0.4 : 0.5, (selectedFitting.scl || 1) - (isStructSel ? 0.2 : 0.15)) }) }, "\u25BC"))),
                 React.createElement(ColorSwatch, { title: "Couleur", value: selectedFitting.color || (isStructSel ? COLORS.structure : COLORS.ink), onChange: (c) => updateFit({ color: c }) }),
                 React.createElement("button", { title: "Dupliquer", "aria-label": "Dupliquer", style: { ...cb, marginLeft: "auto", fontSize: 20 }, onClick: () => duplicateSelection([], [selFit]) }, "+"),
-                React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: () => removeFitting(selFit), style: { ...cb, fontSize: 20, borderColor: "#B3341C", color: "#B3341C" } }, "\u2212")),
+                React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: () => removeFitting(selFit), style: { ...cb, fontSize: 17, borderColor: "#B3341C", color: "#B3341C" } }, "\u2715")),
             selectedFitting.type === "teoduit" && (React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
                 React.createElement("span", { style: { fontSize: 12, color: COLORS.cote } }, "DN du piquage r\u00E9duit :"),
                 React.createElement("select", { value: selectedFitting.branchDn || "", onInput: (e) => updateFit({ branchDn: e.target.value ? +e.target.value : null }), style: { padding: "8px 10px", borderRadius: 8, border: `1.4px solid ${COLORS.ink}`, fontSize: 16, background: "#fff" } },
@@ -9406,14 +9458,13 @@ function IsoChantier() {
             const d = freeDims.find((x) => x.id === selDim);
             if (!d)
                 return null;
-            return (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontWeight: 800, fontSize: 13, letterSpacing: 1 } }, "COTE"),
-                React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Valeur (mm)", width: 100, value: d.value || "", onInput: (e) => updateDim({ value: e.target.value ? +e.target.value : null }), hidden: !!d.hidden, onToggleHidden: d.value != null ? () => updateDim({ hidden: !d.hidden }) : null }),
-                React.createElement("button", { style: chip, onClick: () => updateDim({ flip: !d.flip }) }, "\u21C4"),
-                React.createElement("button", { style: chip, onClick: () => updateDim({ extAlt: !d.extAlt }) }, "\u2195"),
-                React.createElement("button", { style: chip, onClick: () => updateDim({ off: Math.max(-40, (d.off || 0) - 10) }) }, "+"),
-                React.createElement("button", { style: chip, onClick: () => updateDim({ off: Math.min(120, (d.off || 0) + 10) }) }, "\u2212"),
-                React.createElement("button", { style: { ...chip, marginLeft: "auto", borderColor: "#B3341C", color: "#B3341C" }, onClick: () => { setFreeDims((dd) => dd.filter((x) => x.id !== selDim)); setSelDim(null); } }, "Supprimer")));
+            return (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: { display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap" } },
+                React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Cote (mm)", width: 104, value: d.value || "", onInput: (e) => updateDim({ value: e.target.value ? +e.target.value : null }), hidden: !!d.hidden, onToggleHidden: d.value != null ? () => updateDim({ hidden: !d.hidden }) : null }),
+                React.createElement("button", { style: cb, title: "Changer de c\u00F4t\u00E9", onClick: () => updateDim({ flip: !d.flip }) }, "\u21C4"),
+                React.createElement("button", { style: cb, title: "Autre ligne d'attache", onClick: () => updateDim({ extAlt: !d.extAlt }) }, "\u2195"),
+                React.createElement("button", { style: { ...cb, fontSize: 18 }, title: "\u00C9loigner", onClick: () => updateDim({ off: Math.min(120, (d.off || 0) + 10) }) }, "+"),
+                React.createElement("button", { style: { ...cb, fontSize: 18 }, title: "Rapprocher", onClick: () => updateDim({ off: Math.max(-40, (d.off || 0) - 10) }) }, "\u2212"),
+                React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", style: { ...cb, marginLeft: "auto", borderColor: "#B3341C", color: "#B3341C" }, onClick: () => { setFreeDims((dd) => dd.filter((x) => x.id !== selDim)); setSelDim(null); } }, "\u2715")));
         })(),
         selSegCote && (mode === "select" || mode === "cote") && (() => {
             const s = segments.find((x) => x.id === selSegCote);
@@ -9456,7 +9507,7 @@ function IsoChantier() {
                 React.createElement(TextField, { placeholder: "Nom tron\u00E7on", width: 130, value: seg.name || "", onInput: (e) => updateSeg({ name: e.target.value || null }), hidden: !!seg.nameHidden, onToggleHidden: seg.name ? () => updateSeg({ nameHidden: !seg.nameHidden }) : null }),
                 React.createElement(ColorSwatch, { title: "Couleur du tube", value: seg.color || COLORS.pipe, onChange: (c) => updateSeg({ color: c }) }),
                 React.createElement("button", { title: "Dupliquer", "aria-label": "Dupliquer", style: { ...chip, marginLeft: "auto", minWidth: 46, fontSize: 20, lineHeight: 1, padding: "7px 12px" }, onClick: () => duplicateSelection([selSeg], []) }, "+"),
-                React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: deleteSeg, style: { ...chip, minWidth: 46, fontSize: 20, lineHeight: 1, padding: "7px 12px", borderColor: "#B3341C", color: "#B3341C" } }, "\u2212")),
+                React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: deleteSeg, style: { ...chip, minWidth: 46, fontSize: 17, lineHeight: 1, padding: "7px 12px", borderColor: "#B3341C", color: "#B3341C" } }, "\u2715")),
             seg.cote != null && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
                 React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "COTE :"),
                 React.createElement("button", { style: chip, onClick: () => updateSeg({ flip: !seg.flip }) }, "\u21C4"),
