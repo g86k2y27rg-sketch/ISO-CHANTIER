@@ -1547,6 +1547,9 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
             middlePanRef.current = { x: e.clientX, y: e.clientY, pan0: pan };
             return;
         }
+        // premier doigt d'un nouveau geste : purge d'éventuels doigts fantômes
+        if (e.isPrimary || e.pointerType === "mouse")
+            pointersRef.current.clear();
         const pp0 = pointerPos(e);
         const hitHandle = (_a = selectedWallHandles
             .map((h) => ({ h, d: Math.hypot(h.screen.x - pp0.x, h.screen.y - pp0.y) }))
@@ -3656,6 +3659,29 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
     // accessoire soit intercalé au bon niveau parmi tuyaux/murs — sinon,
     // rendu à part, il finit toujours dessiné PAR-DESSUS tout le reste quel
     // que soit son rang, ce qui le rendait visible à travers un mur opaque
+    // bride simple posée au bout d'un tube raccordé à un piquage à bride
+    // d'appareil : l'ensemble est rendu comme un VRAI jeu de brides (2 brides
+    // face à face, joint, boulonnerie) centré sur le nœud du piquage, au lieu
+    // de deux brides qui se chevauchent
+    const bsEndNode = (f) => {
+        if (f.type !== "bridesimple" || f.segId == null)
+            return null;
+        const s = segments.find((x) => x.id === f.segId);
+        if (!s)
+            return null;
+        const t = f.t != null ? f.t : 0.5;
+        return t <= 0.05 ? s.a : t >= 0.95 ? s.b : null;
+    };
+    const flangedNozzles = (() => {
+        const out = {};
+        const k = appWorldScale(segments, nodes);
+        (fittings || []).filter(isApp3).forEach((f) => {
+            const g = appReal(f, k);
+            g.noz.forEach((q) => { if (q.kind === "bride" && q.n.node) out[q.n.node] = { u: q.D, dn: q.n.dn }; });
+        });
+        return out;
+    })();
+    const pairedNozNodes = new Set((fittings || []).map(bsEndNode).filter((nk) => nk && flangedNozzles[nk]));
     const buildMarkers = () => fittings
         .filter((f) => !STRUCTURE_TYPES.includes(f.type) && f.type !== "texte" && f.segId !== undefined)
         .filter((f) => showSupports3D || f.type !== "support")
@@ -3672,7 +3698,11 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
         // noir) écrasait tout nuancé d'ombrage ; le gris acier laisse le
         // dégradé de faces se voir, tout en respectant f.color si personnalisé
         const col = f.color || (f.type === "support" ? COLORS.accent : (VOLUMETRIC_FITTING_TYPES.includes(f.type) || APPLIANCE_METAL_TYPES.includes(f.type)) ? "#8A96A3" : COLORS.ink);
-        const prims = fittingPrimitives3D(f.type, pos, axis, sign, f.rot, s && s.dn, col, f.branchDn, f.bdir, f.shellDia, f.axis3d, f.shellLen, f.axOff);
+        const pairNode = bsEndNode(f);
+        const pair = pairNode && flangedNozzles[pairNode] && resolved.posMap[pairNode];
+        const prims = pair
+            ? fittingPrimitives3D("bride", resolved.posMap[pairNode], flangedNozzles[pairNode].u, 1, 0, (s && s.dn) || flangedNozzles[pairNode].dn, col)
+            : fittingPrimitives3D(f.type, pos, axis, sign, f.rot, s && s.dn, col, f.branchDn, f.bdir, f.shellDia, f.axis3d, f.shellLen, f.axOff);
         const projPrims = prims.map((pr) => {
             if (pr.kind === "line")
                 return { kind: "line", a: screenPt(pr.a), b: screenPt(pr.b) };
@@ -3729,7 +3759,9 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
                 const a0 = add3(a, q.D, -Math.min(r * 0.5, 0.3));
                 const half = Math.hypot(b.x - a0.x, b.y - a0.y, b.z - a0.z) / 2;
                 prims.push(...discSolid({ x: (a0.x + b.x) / 2, y: (a0.y + b.y) / 2, z: (a0.z + b.z) / 2 }, q.D, q.rn, half, col, 14, true));
-                if (q.kind === "bride")
+                // bride du piquage : dessinée par le jeu de brides si une bride
+                // simple lui fait face sur le tube raccordé
+                if (q.kind === "bride" && !pairedNozNodes.has(q.n.node))
                     prims.push(...discSolid(add3(b, q.D, -0.1), q.D, q.rn * 1.9, 0.1, col, 18, true));
             });
             const projPrims = prims.map((pr) => {
@@ -4374,6 +4406,42 @@ function IsoChantier() {
         tapRef.current = null;
         dragRef.current = null;
     };
+    // doigt « fantôme » resté dans le suivi (relâché au-dessus d'une fenêtre,
+    // d'un bouton, geste système iOS…) : le suivant était pris pour un
+    // pincement → plus de tracé, seulement zoom/dézoom. On nettoie dès que le
+    // navigateur signale la fin réelle d'un toucher, où qu'il ait eu lieu.
+    useEffect(() => {
+        const drop = (e) => {
+            if (pointers.current.has(e.pointerId)) {
+                pointers.current.delete(e.pointerId);
+                if (pointers.current.size < 2)
+                    pinchRef.current = null;
+            }
+        };
+        const allUp = (e) => {
+            if (!e.touches || e.touches.length === 0) {
+                pointers.current.clear();
+                pinchRef.current = null;
+            }
+        };
+        const wipe = () => resetTouchState();
+        const onVis = () => { if (document.hidden) resetTouchState(); };
+        window.addEventListener("pointerup", drop);
+        window.addEventListener("pointercancel", drop);
+        window.addEventListener("touchend", allUp);
+        window.addEventListener("touchcancel", allUp);
+        window.addEventListener("blur", wipe);
+        document.addEventListener("visibilitychange", onVis);
+        return () => {
+            window.removeEventListener("pointerup", drop);
+            window.removeEventListener("pointercancel", drop);
+            window.removeEventListener("touchend", allUp);
+            window.removeEventListener("touchcancel", allUp);
+            window.removeEventListener("blur", wipe);
+            document.removeEventListener("visibilitychange", onVis);
+        };
+        // eslint-disable-next-line
+    }, []);
     const [vp, setVp] = useState({ w: 390, h: 600 });
     const containerRef = useRef(null);
     useEffect(() => {
@@ -5045,6 +5113,12 @@ function IsoChantier() {
         }
         catch (err) { }
         const pt = svgPoint(e);
+        // premier doigt d'un nouveau geste (isPrimary) : aucun autre doigt ne
+        // peut être posé → tout doigt encore en mémoire est un fantôme
+        if (e.isPrimary || e.pointerType === "mouse") {
+            pointers.current.clear();
+            pinchRef.current = null;
+        }
         pointers.current.set(e.pointerId, pt);
         if (pointers.current.size === 2) {
             const [p1, p2] = [...pointers.current.values()];
@@ -5095,10 +5169,31 @@ function IsoChantier() {
                     return;
                 }
             }
+            // étiquette de nom de tronçon : cadre libre, point d'accroche
+            // glissant sur la longueur du tronçon
+            for (const s of segments) {
+                if (!s.name || s.nameHidden)
+                    continue;
+                const lp = nameLabelPos(s);
+                if (Math.hypot(lp.x - pt.x, lp.y - pt.y) < 28) {
+                    snapshot();
+                    dragRef.current = { nameSeg: s.id };
+                    return;
+                }
+            }
+            for (const s of segments) {
+                if (!s.name || s.nameHidden)
+                    continue;
+                const lp = nameLabelPos(s);
+                if (Math.hypot(lp.mid.x - pt.x, lp.mid.y - pt.y) < 16) {
+                    dragRef.current = { nameAnchor: s.id, armed: false, sx: pt.x, sy: pt.y };
+                    return;
+                }
+            }
             for (const g of dnGroups) {
                 const lp = dnLabelPos(g.anchor);
                 if (Math.hypot(lp.mid.x - pt.x, lp.mid.y - pt.y) < 16) {
-                    dragRef.current = { dnAnchor: g.anchor.id, armed: false, sx: pt.x, sy: pt.y };
+                    dragRef.current = { dnAnchor: g.anchor.id, grp: g.segs, lab: { x: lp.x, y: lp.y }, armed: false, sx: pt.x, sy: pt.y };
                     return;
                 }
             }
@@ -5178,17 +5273,6 @@ function IsoChantier() {
                         moveSel: true, sx: pt.x, sy: pt.y, ax: 0, ay: 0,
                         nodeIds: [...nodeSet], freeFits, appFits, segIds: [...mSegs],
                     };
-                    return;
-                }
-            }
-            // glisser une étiquette de nom de tronçon
-            for (const s of segments) {
-                if (!s.name || s.nameHidden)
-                    continue;
-                const lp = nameLabelPos(s);
-                if (Math.hypot(lp.x - pt.x, lp.y - pt.y) < 28) {
-                    snapshot();
-                    dragRef.current = { nameSeg: s.id };
                     return;
                 }
             }
@@ -5435,6 +5519,25 @@ function IsoChantier() {
             }
             return;
         }
+        if (dragRef.current && dragRef.current.nameAnchor) {
+            const dr = dragRef.current;
+            if (!dr.armed) {
+                if (Math.hypot(pt.x - dr.sx, pt.y - dr.sy) < 10)
+                    return;
+                dr.armed = true;
+                snapshot();
+            }
+            const sg = segments.find((x) => x.id === dr.nameAnchor);
+            if (sg && nodes[sg.a] && nodes[sg.b]) {
+                const A = proj(nodes[sg.a]), B = proj(nodes[sg.b]);
+                const L2 = (B.x - A.x) ** 2 + (B.y - A.y) ** 2 || 1;
+                const tt = Math.max(0.03, Math.min(0.97, ((pt.x - A.x) * (B.x - A.x) + (pt.y - A.y) * (B.y - A.y)) / L2));
+                setSegments((ss) => ss.map((x) => (x.id === sg.id ? { ...x, namet: tt } : x)));
+            }
+            t.lx = pt.x;
+            t.ly = pt.y;
+            return;
+        }
         if (dragRef.current && dragRef.current.dnAnchor) {
             const dr = dragRef.current;
             if (!dr.armed) {
@@ -5443,12 +5546,39 @@ function IsoChantier() {
                 dr.armed = true;
                 snapshot();
             }
-            const sg = segments.find((x) => x.id === dr.dnAnchor);
-            if (sg) {
+            // le point d'accroche glisse sur TOUS les tronçons du même DN
+            // raccordés : il passe sur le tronçon le plus proche du doigt, le
+            // cadre de l'étiquette restant à sa place à l'écran
+            let best = null, bd = 1e9, bt = 0.5;
+            for (const sid2 of dr.grp || [dr.dnAnchor]) {
+                const sg = segments.find((x) => x.id === sid2);
+                if (!sg || !nodes[sg.a] || !nodes[sg.b])
+                    continue;
                 const A = proj(nodes[sg.a]), B = proj(nodes[sg.b]);
                 const L2 = (B.x - A.x) ** 2 + (B.y - A.y) ** 2 || 1;
                 const tt = Math.max(0.03, Math.min(0.97, ((pt.x - A.x) * (B.x - A.x) + (pt.y - A.y) * (B.y - A.y)) / L2));
-                setSegments((ss) => ss.map((x) => (x.id === sg.id ? { ...x, dnt: tt } : x)));
+                const d = Math.hypot(A.x + (B.x - A.x) * tt - pt.x, A.y + (B.y - A.y) * tt - pt.y);
+                if (d < bd) {
+                    bd = d;
+                    best = sg;
+                    bt = tt;
+                }
+            }
+            if (best) {
+                const A = proj(nodes[best.a]), B = proj(nodes[best.b]);
+                const c0 = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+                const moveTo = best.id !== dr.dnAnchor;
+                const grp = new Set(dr.grp || []);
+                setSegments((ss) => ss.map((x) => {
+                    if (x.id === best.id)
+                        return moveTo
+                            ? { ...x, dnt: bt, dnLab: true, dnlx: (dr.lab.x - c0.x) / zoom, dnly: (dr.lab.y - c0.y) / zoom }
+                            : { ...x, dnt: bt };
+                    if (moveTo && grp.has(x.id) && x.dnLab)
+                        return { ...x, dnLab: false };
+                    return x;
+                }));
+                dr.dnAnchor = best.id;
             }
             t.lx = pt.x;
             t.ly = pt.y;
@@ -5643,7 +5773,7 @@ function IsoChantier() {
             tapRef.current = null;
             return;
         }
-        if (dragRef.current && dragRef.current.dnAnchor) {
+        if (dragRef.current && (dragRef.current.dnAnchor || dragRef.current.nameAnchor)) {
             const moved = dragRef.current.armed;
             dragRef.current = null;
             if (moved) {
@@ -6614,7 +6744,7 @@ function IsoChantier() {
                 }
             }
             comp.sort((x, y) => parseInt(x.id.slice(1)) - parseInt(y.id.slice(1)));
-            groups.push({ anchor: comp[0], dn: s.dn });
+            groups.push({ anchor: comp.find((x) => x.dnLab) || comp[0], dn: s.dn, segs: comp.map((x) => x.id) });
         }
         return groups;
     }, [segments, nodes]);
@@ -7462,11 +7592,14 @@ function IsoChantier() {
     const nameLabelPos = (s) => {
         var _a, _b;
         const A = proj(nodes[s.a]), B = proj(nodes[s.b]);
-        const mid = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+        const c0 = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+        // point d'accroche réglable le long du tronçon (namet), cadre inchangé
+        const tt = s.namet != null ? s.namet : 0.5;
+        const mid = { x: A.x + (B.x - A.x) * tt, y: A.y + (B.y - A.y) * tt };
         return {
             mid,
-            x: mid.x + ((_a = s.namelx) !== null && _a !== void 0 ? _a : -40) * zoom,
-            y: mid.y + ((_b = s.namely) !== null && _b !== void 0 ? _b : 44) * zoom,
+            x: c0.x + ((_a = s.namelx) !== null && _a !== void 0 ? _a : -40) * zoom,
+            y: c0.y + ((_b = s.namely) !== null && _b !== void 0 ? _b : 44) * zoom,
         };
     };
     // points où le trait de rappel d'un nom de tronçon croise un autre tube
@@ -8951,8 +9084,10 @@ function IsoChantier() {
             const nameLabelPosE = (s) => {
                 var _a, _b;
                 const A = projE(nodes[s.a]), B = projE(nodes[s.b]);
-                const mid = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
-                return { mid, x: mid.x + ((_a = s.namelx) !== null && _a !== void 0 ? _a : -40) * rv.zoom, y: mid.y + ((_b = s.namely) !== null && _b !== void 0 ? _b : 44) * rv.zoom };
+                const c0 = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+                const tt = s.namet != null ? s.namet : 0.5;
+                const mid = { x: A.x + (B.x - A.x) * tt, y: A.y + (B.y - A.y) * tt };
+                return { mid, x: c0.x + ((_a = s.namelx) !== null && _a !== void 0 ? _a : -40) * rv.zoom, y: c0.y + ((_b = s.namely) !== null && _b !== void 0 ? _b : 44) * rv.zoom };
             };
             const leaderGapPointsE = (P, Q, excludeId) => {
                 const pts = [];
@@ -9257,7 +9392,8 @@ function IsoChantier() {
                 }
             }
         }
-        setSegments((ss) => ss.map((s) => (visited.has(s.id) ? { ...s, dn } : s)));
+        // l'étiquette DN s'affiche sur le tronçon où le DN a été saisi
+        setSegments((ss) => ss.map((s) => (visited.has(s.id) ? { ...s, dn, dnLab: s.id === startId } : s)));
     };
     if (window.__DEBUG_2D_ENABLED)
         window.__propagateDn2D = propagateDn;
