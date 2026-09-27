@@ -308,7 +308,7 @@ const DEV_CHANTIER_HTML = "\u003c!DOCTYPE html>\n\u003chtml lang=\"fr\">\n\u003c
 // ---- Barre des modes : pictogrammes au trait (d'après Tabler Icons, MIT) ----
 const MODE_ICON_PATHS = {
     draw: ["M3 19a2 2 0 1 0 4 0a2 2 0 0 0 -4 0", "M19 7a2 2 0 1 0 0 -4a2 2 0 0 0 0 4z", "M11 19h5.5a3.5 3.5 0 0 0 0 -7h-8a3.5 3.5 0 0 1 0 -7h4.5"],
-    add: ["M12 3l8 4.5l0 9l-8 4.5l-8 -4.5l0 -9l8 -4.5", "M12 12l8 -4.5", "M12 12l0 9", "M12 12l-8 -4.5", "M16 5.25l-8 4.5"],
+    add: ["M3 12c0 -7.2 1.8 -9 9 -9s9 1.8 9 9s-1.8 9 -9 9s-9 -1.8 -9 -9", "M12 8v8", "M8 12h8"],
     select: ["M3 12l3 0", "M12 3l0 3", "M7.8 7.8l-2.2 -2.2", "M16.2 7.8l2.2 -2.2", "M7.8 16.2l-2.2 2.2", "M12 12l9 3l-4 2l-2 4l-3 -9"],
     cote: ["M4 12v-6a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v6", "M10 18h-7", "M21 18h-7", "M6 15l-3 3l3 3", "M18 15l3 3l-3 3"],
 };
@@ -555,25 +555,46 @@ const appAxis = (f) => (AXV3[f.axis3d] ? f.axis3d : "X");
 const appR = (f) => (f.gR != null ? f.gR : (APP_DEF[f.type] || APP_DEF.bache).r);
 const appL = (f) => (f.gL != null ? f.gL : (APP_DEF[f.type] || APP_DEF.bache).L);
 const nozIsAxial = (f, n) => n.dir[1] === appAxis(f);
-const nozExtMin = (f, n) => (nozIsAxial(f, n) ? Math.ceil(appL(f) / 2 + 0.7) : Math.ceil(appR(f) + 0.7));
+// piquage à 45° : la sortie (dir) est inclinée vers un second axe (tilt)
+const nozTilt = (n) => (n.tilt && n.tilt[1] !== n.dir[1] ? n.tilt : null);
+const nozDir = (n) => { const D = dirVec3(n.dir); const t = nozTilt(n); return t ? add3(D, dirVec3(t), 1) : D; };
+const unit3 = (v) => { const L = Math.hypot(v.x, v.y, v.z) || 1; return { x: v.x / L, y: v.y / L, z: v.z / L }; };
+// distance, en multiples de v, entre le point de l'axe de l'appareil (décalé
+// de `at`) et la paroi (virole ou fond) le long du piquage
+const nozRootS = (A, r, h, at, v) => {
+    const a = v.x * A.x + v.y * A.y + v.z * A.z;
+    const perp = Math.hypot(v.x - a * A.x, v.y - a * A.y, v.z - a * A.z);
+    let s = Infinity;
+    if (perp > 1e-9)
+        s = r / perp;
+    if (a > 1e-9)
+        s = Math.min(s, (h - at) / a);
+    if (a < -1e-9)
+        s = Math.min(s, (h + at) / -a);
+    return isFinite(s) ? Math.max(0, s) : 0;
+};
+const nozExtMin = (f, n) => {
+    const v = nozDir(n);
+    const s = nozRootS(AXV3[appAxis(f)], appR(f), appL(f) / 2, n.at || 0, v);
+    return Math.ceil(s + 0.7 / Math.hypot(v.x, v.y, v.z));
+};
 const appAtMax = (f) => Math.max(0, Math.ceil(appL(f) / 2 - 0.25) - 1);
 // piquage ramené dans les limites valides (position sur la virole, longueur
 // mini hors corps) — valeurs entières : l'extrémité tombe toujours sur la grille
 const nozFix = (f, n) => {
     const m = appAtMax(f);
-    const at = nozIsAxial(f, n) ? 0 : Math.max(-m, Math.min(m, Math.round(n.at || 0)));
-    const ext = Math.max(nozExtMin(f, n), Math.round(n.ext || 0));
-    return { ...n, at, ext };
+    const q = { ...n, at: nozIsAxial(f, n) ? 0 : Math.max(-m, Math.min(m, Math.round(n.at || 0))) };
+    q.ext = Math.max(nozExtMin(f, q), Math.round(n.ext || 0));
+    return q;
 };
 const appNormalize = (f) => ({ ...f, noz: (f.noz || []).map((n) => nozFix(f, n)) });
 const nozBase3 = (f, n) => {
-    const A = AXV3[appAxis(f)], D = dirVec3(n.dir);
-    return nozIsAxial(f, n) ? add3(f.p3, D, appL(f) / 2) : add3(add3(f.p3, A, n.at || 0), D, appR(f));
+    const q = nozFix(f, n), A = AXV3[appAxis(f)], v = nozDir(q);
+    return add3(add3(f.p3, A, q.at), v, nozRootS(A, appR(f), appL(f) / 2, q.at, v));
 };
 const nozEnd3 = (f, n) => {
-    const q = nozFix(f, n);
-    const A = AXV3[appAxis(f)], D = dirVec3(q.dir);
-    return nozIsAxial(f, q) ? add3(f.p3, D, q.ext) : add3(add3(f.p3, A, q.at), D, q.ext);
+    const q = nozFix(f, n), A = AXV3[appAxis(f)];
+    return add3(add3(f.p3, A, q.at), nozDir(q), q.ext);
 };
 const hull2D = (pts) => {
     const P = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
@@ -613,7 +634,54 @@ const appWorldScale = (segments, nodes) => {
 };
 // axe du trait de collerette par défaut : vertical pour une sortie à plat,
 // suivant l'axe de l'appareil (ou X) pour une sortie verticale
-const nozFlangeAxis = (f, n) => (n.dir[1] === "Z" ? (appAxis(f) === "Z" ? "X" : appAxis(f)) : "Z");
+const nozFlangeAxis = (f, n) => {
+    const t = nozTilt(n);
+    if (t)
+        return ["X", "Y", "Z"].find((a) => a !== n.dir[1] && a !== t[1]);
+    return n.dir[1] === "Z" ? (appAxis(f) === "Z" ? "X" : appAxis(f)) : "Z";
+};
+// options de trait de collerette : les axes iso ⊥ à la sortie ; pour un
+// piquage à 45°, l'axe ⊥ aux deux directions ou la diagonale du plan incliné
+const nozFlangeOpts = (n) => {
+    const t = nozTilt(n);
+    return t ? [["X", "Y", "Z"].find((a) => a !== n.dir[1] && a !== t[1]), "diag"] : ["X", "Y", "Z"].filter((a) => a !== n.dir[1]);
+};
+const nozFlangeCur = (f, n) => (n.fAx && nozFlangeOpts(n).includes(n.fAx) ? n.fAx : nozFlangeAxis(f, n));
+const nozFlangeVec = (f, n) => {
+    const c = nozFlangeCur(f, n);
+    if (c === "diag")
+        return unit3(add3(dirVec3(n.dir), dirVec3(nozTilt(n)), -1));
+    return AXV3[c];
+};
+// diamètres extérieurs normalisés (mm) — piquages en 3D
+const OD_MM = { 15: 21.3, 20: 26.9, 25: 33.7, 32: 42.4, 40: 48.3, 50: 60.3, 65: 76.1, 80: 88.9, 100: 114.3, 125: 139.7, 150: 168.3, 200: 219.1, 250: 273, 300: 323.9, 400: 406.4, 500: 508 };
+// géométrie RÉELLE d'un appareil pour la 3D (unités monde : 1 = 100 mm),
+// relative au centre du corps. Les dimensions saisies dans la fenêtre
+// « Dimensions 3D » (f.mm, n.mmPos, n.mmLen, n.dn) priment ; à défaut, les
+// proportions du croquis iso mises à l'échelle k (monde par unité de grille)
+const numOk = (v) => v != null && v !== "" && isFinite(+v) && +v > 0;
+const appReal = (f, k) => {
+    const mm = f.mm || {};
+    const A = AXV3[appAxis(f)];
+    const r = numOk(mm.D) ? +mm.D / 200 : appR(f) * k;
+    const h = numOk(mm.L) ? +mm.L / 200 : (appL(f) / 2) * k;
+    const dome = f.type === "circulateur" ? 0 : 0.35 * r;
+    const noz = (f.noz || []).map((n0) => {
+        const n = nozFix(f, n0);
+        const v = nozDir(n), vl = Math.hypot(v.x, v.y, v.z), u = unit3(v);
+        const axial = nozIsAxial(f, n);
+        // point de l'axe de l'appareil par lequel passe l'axe du piquage,
+        // mesuré depuis le fond côté −axe
+        const t0 = axial ? 0 : (n0.mmPos != null && n0.mmPos !== "" && isFinite(+n0.mmPos) ? -h + +n0.mmPos / 100 : n.at * k);
+        const O = add3({ x: 0, y: 0, z: 0 }, A, t0);
+        const base = add3(O, u, nozRootS(A, r, h + dome, t0, u));
+        const sG = nozRootS(A, appR(f), appL(f) / 2, n.at, v);
+        const len = numOk(n0.mmLen) ? +n0.mmLen / 100 : Math.max(0.1, (n.ext - sG) * vl * k);
+        const rn = n0.dn && OD_MM[n0.dn] ? OD_MM[n0.dn] / 200 : Math.max(0.06, Math.min(r * 0.3, 0.35));
+        return { n: n0, kind: n.kind, D: u, t0, base, end: add3(base, u, len), rn };
+    });
+    return { A, r, h, dome, noz };
+};
 // géométrie écran d'un appareil — P projette un point 3D (grille) à l'écran
 const appPrims = (f, P) => {
     const ax = appAxis(f), A = AXV3[ax], r = appR(f), h = appL(f) / 2, c = f.p3;
@@ -652,10 +720,10 @@ const appPrims = (f, P) => {
     const view = { x: 1, y: 1, z: 1 };
     const noz = (f.noz || []).map((n0) => {
         const n = nozFix(f, n0);
-        const D = dirVec3(n.dir);
+        const D = unit3(nozDir(n));
         const a3 = nozBase3(f, n), b3 = nozEnd3(f, n);
         // collerette de bride : trait perpendiculaire suivant un axe iso ⊥ au piquage
-        const Wf = n.fAx && n.fAx !== n.dir[1] && AXV3[n.fAx] ? AXV3[n.fAx] : AXV3[nozFlangeAxis(f, n)];
+        const Wf = nozFlangeVec(f, n);
         const fr = Math.max(0.3, Math.min(0.55, r * 0.45));
         // bride : collerette en retrait du nœud d'un jeu de bride (7 px à
         // zoom 1, comme l'écart des deux traits d'une bride double) — la bride
@@ -1297,14 +1365,16 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
             const nz = (f.noz || []).filter((n) => n.node && nodes[n.node]);
             if (nz.length < 2)
                 return;
-            const e0 = nozEnd3(f, nz[0]);
+            const gR = appReal(f, kApp);
+            const endOf = (n) => gR.noz.find((q) => q.n.id === n.id).end;
+            const e0 = endOf(nz[0]);
             nz.slice(1).forEach((n, i) => {
-                const e = nozEnd3(f, n);
-                const legs = [["x", e.x - e0.x], ["y", e.y - e0.y], ["z", e.z - e0.z]].filter(([, v]) => v !== 0);
+                const e = endOf(n);
+                const legs = [["x", e.x - e0.x], ["y", e.y - e0.y], ["z", e.z - e0.z]].filter(([, v]) => Math.abs(v) > 1e-6);
                 let from = nz[0].node;
                 legs.forEach(([axn, v], j) => {
                     const to = j === legs.length - 1 ? n.node : "__app_" + f.id + "_" + i + "_" + j;
-                    const vs = { id: "__appv_" + f.id + "_" + i + "_" + j, a: from, b: to, __virtual: true, __axis: axn, __sign: v > 0 ? 1 : -1, __len: Math.abs(v) * kApp * 100 };
+                    const vs = { id: "__appv_" + f.id + "_" + i + "_" + j, a: from, b: to, __virtual: true, __axis: axn, __sign: v > 0 ? 1 : -1, __len: Math.abs(v) * 100 };
                     virtualSegs.push(vs);
                     (adj[vs.a] = adj[vs.a] || []).push(vs);
                     (adj[vs.b] = adj[vs.b] || []).push(vs);
@@ -3637,31 +3707,30 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
                 return null;
             const anchorN = noz.find((n) => segments.some((s) => s.a === n.node || s.b === n.node)) || noz[0];
             const anchorW = resolved.posMap[anchorN.node];
-            const e3 = nozEnd3(f, anchorN);
-            const toW = (q) => ({ x: anchorW.x + (q.x - e3.x) * k, y: anchorW.y + (q.y - e3.y) * k, z: anchorW.z + (q.z - e3.z) * k });
+            const g = appReal(f, k);
+            const ga = g.noz.find((q) => q.n.id === anchorN.id);
+            const ctr = { x: anchorW.x - ga.end.x, y: anchorW.y - ga.end.y, z: anchorW.z - ga.end.z };
             const col = f.color || "#9AA5B1";
-            const A = AXV3[appAxis(f)], negA = { x: -A.x, y: -A.y, z: -A.z };
-            const r = appR(f) * k, h = (appL(f) / 2) * k;
-            const ctr = toW(f.p3);
+            const A = g.A, negA = { x: -A.x, y: -A.y, z: -A.z };
+            const r = g.r, h = g.h;
             const prims = [...discSolid(ctr, A, r, h, col, 24, true)];
-            if (f.type !== "circulateur") {
+            if (g.dome > 0) {
                 // fonds bombés
                 const prof = [];
                 for (let i = 0; i <= 6; i++) {
                     const a = (i / 6) * (Math.PI / 2);
-                    prof.push({ z: 0.35 * r * Math.sin(a), r: r * Math.cos(a) });
+                    prof.push({ z: g.dome * Math.sin(a), r: r * Math.cos(a) });
                 }
                 prims.push(...revolveProfile(add3(ctr, A, h), A, prof, col, 24), ...revolveProfile(add3(ctr, A, -h), negA, prof, col, 24));
             }
-            (f.noz || []).forEach((n0) => {
-                const n = nozFix(f, n0);
-                const D = dirVec3(n.dir);
-                const a = toW(nozBase3(f, n)), b = toW(nozEnd3(f, n));
-                const half = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) / 2;
-                const rn = Math.max(0.06, Math.min(r * 0.3, 0.35));
-                prims.push(...discSolid({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 }, D, rn, half, col, 12, true));
-                if (n.kind === "bride")
-                    prims.push(...discSolid(add3(b, D, -0.05), D, rn * 1.9, 0.05, col, 16, true));
+            g.noz.forEach((q) => {
+                // le piquage part de l'intérieur de la virole pour s'y raccorder proprement
+                const a = add3(ctr, q.base, 1), b = add3(ctr, q.end, 1);
+                const a0 = add3(a, q.D, -Math.min(r * 0.5, 0.3));
+                const half = Math.hypot(b.x - a0.x, b.y - a0.y, b.z - a0.z) / 2;
+                prims.push(...discSolid({ x: (a0.x + b.x) / 2, y: (a0.y + b.y) / 2, z: (a0.z + b.z) / 2 }, q.D, q.rn, half, col, 14, true));
+                if (q.kind === "bride")
+                    prims.push(...discSolid(add3(b, q.D, -0.1), q.D, q.rn * 1.9, 0.1, col, 18, true));
             });
             const projPrims = prims.map((pr) => {
                 if (pr.kind === "poly") {
@@ -4179,6 +4248,10 @@ function IsoChantier() {
     const [selTri, setSelTri] = useState(null); // 1 ou 2 : quel triangle d'un double casse est actif
     const [selFit, setSelFit] = useState(null);
     const [selNoz, setSelNoz] = useState(null); // piquage sélectionné (appareil)
+    const [segMore, setSegMore] = useState(false); // options avancées du tronçon dépliées
+    const [appDimOpen, setAppDimOpen] = useState(false); // fenêtre « Dimensions 3D » d'un appareil
+    const [nozPop, setNozPop] = useState(false); // fenêtre de réglage du piquage sélectionné
+    const nozAnchorRef = useRef(null); // position d'ouverture de cette fenêtre (bouton touché)
     const [selDim, setSelDim] = useState(null);
     const [selSegCote, setSelSegCote] = useState(null);
     const [zoom, setZoom] = useState(1);
@@ -9255,7 +9328,7 @@ function IsoChantier() {
         setFittings((ff) => ff.map((f) => (f.id === selFit ? { ...f, ...patch } : f)));
     };
     // ---- appareils : corps + piquages ----
-    useEffect(() => { setSelNoz(null); }, [selFit]);
+    useEffect(() => { setSelNoz(null); setAppDimOpen(false); setNozPop(false); }, [selFit]);
     const updateApp = (fn) => {
         snapshot();
         setFittings((ff) => ff.map((f) => (f.id === selFit && isApp3(f) ? appNormalize(fn(f)) : f)));
@@ -9549,6 +9622,11 @@ function IsoChantier() {
         fontSize: 16, fontFamily: "'Archivo', sans-serif", width: "100%",
         boxSizing: "border-box",
     };
+    // ligne de panneau : jamais de retour à la ligne au milieu d'un groupe
+    const rowS = { display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap", overflowX: "auto", WebkitOverflowScrolling: "touch" };
+    const labS = { fontSize: 11.5, fontWeight: 800, color: COLORS.cote, flexShrink: 0, letterSpacing: 0.3 };
+    const cbx = { ...cb, flexShrink: 0 };
+    const cbDel = { ...cb, flexShrink: 0, fontSize: 17, borderColor: "#B3341C", color: "#B3341C" };
     const isStructSel = selectedFitting && STRUCTURE_TYPES.includes(selectedFitting.type);
     const isTextSel = selectedFitting && selectedFitting.type === "texte";
     const isShapeSel = selectedFitting && selectedFitting.type === "forme";
@@ -9600,6 +9678,130 @@ function IsoChantier() {
         mItem("Exporter en PNG", "\u2B07\uFE0E", () => { closeMenusNow(); exportPng(); }, true),
         mItem("Imprimer / PDF", "\u2399", () => { closeMenusNow(); exportPng("pdf"); }));
     const dimLayer = React.createElement("div", { className: "ios-dim" + (menuClosing ? " closing" : ""), onClick: closeMenusAnimated, style: { position: "fixed", inset: 0, zIndex: 29, background: "rgba(0,0,0,0.12)" } });
+    // ---- fenêtre « Dimensions 3D » d'un appareil : cotes réelles en mm ----
+    const appDimPopup = (() => {
+        const f = appDimOpen && fittings.find((x) => x.id === selFit);
+        if (!isApp3(f))
+            return null;
+        const setMM = (patch) => setFittings((ff) => ff.map((x) => (x.id === f.id ? { ...x, mm: { ...(x.mm || {}), ...patch } } : x)));
+        const setN = (nid2, patch) => setFittings((ff) => ff.map((x) => (x.id === f.id ? { ...x, noz: (x.noz || []).map((n) => (n.id === nid2 ? { ...n, ...patch } : n)) } : x)));
+        const num = (v) => (v === "" || v == null ? null : +v);
+        const ax = appAxis(f);
+        const fromEnd = ax === "Z" ? "depuis le fond bas" : "depuis le fond \u2212" + ax;
+        const g = appReal(f, 1);
+        const fieldS = { ...field, width: 96, padding: "8px 8px", flexShrink: 0 };
+        const lab2 = { fontSize: 11, fontWeight: 700, color: COLORS.cote, display: "block", marginBottom: 3 };
+        const cell = (label, input) => React.createElement("label", { style: { display: "block", flexShrink: 0 } }, React.createElement("span", { style: lab2 }, label), input);
+        const inp = (value, onChange, ph, disabled) => React.createElement("input", { type: "number", inputMode: "decimal", className: "no-spin", value: value == null ? "" : value, placeholder: ph, disabled, onInput: (e) => onChange(num(e.target.value)), style: { ...fieldS, opacity: disabled ? 0.4 : 1 } });
+        return React.createElement("div", { className: "ios-dim", onClick: () => setAppDimOpen(false), style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.28)", zIndex: 9000, display: "flex", alignItems: "flex-end", justifyContent: "center" } },
+            React.createElement("div", { className: "ios-menu up", onClick: (e) => e.stopPropagation(), style: {
+                    background: COLORS.sheet, width: "100%", maxWidth: 520, maxHeight: "78vh", overflowY: "auto",
+                    borderRadius: "16px 16px 0 0", padding: "14px 16px calc(16px + env(safe-area-inset-bottom))",
+                    boxShadow: "0 -8px 30px rgba(0,0,0,0.18)", display: "flex", flexDirection: "column", gap: 12,
+                } },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+                    React.createElement("div", { style: { flex: 1 } },
+                        React.createElement("div", { style: { fontWeight: 800, fontSize: 15 } }, "Dimensions 3D \u2014 " + fitLabel(f)),
+                        React.createElement("div", { style: { fontSize: 11.5, color: COLORS.cote } }, "Cotes r\u00E9elles en mm \u00B7 vide = proportions du croquis")),
+                    React.createElement("button", { style: { ...cbOn, flexShrink: 0, padding: "0 14px" }, onClick: () => setAppDimOpen(false) }, "OK")),
+                React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap" } },
+                    cell("\u00D8 virole (mm)", inp((f.mm || {}).D, (v) => setMM({ D: v }), Math.round(g.r * 200))),
+                    cell("Longueur virole (mm)", inp((f.mm || {}).L, (v) => setMM({ L: v }), Math.round(g.h * 200)))),
+                (f.noz || []).length === 0 && React.createElement("div", { style: { fontSize: 12.5, color: COLORS.cote } }, "Aucun piquage \u2014 ajoutez-les depuis le panneau de l'appareil."),
+                (f.noz || []).map((n, i) => {
+                    const q = g.noz[i];
+                    const axial = nozIsAxial(f, nozFix(f, n));
+                    const defPos = axial ? null : Math.round((q.t0 + g.h) * 100);
+                    const defLen = Math.round(Math.hypot(q.end.x - q.base.x, q.end.y - q.base.y, q.end.z - q.base.z) * 100);
+                    return React.createElement("div", { key: n.id, style: { borderTop: `1px solid ${COLORS.gridStrong}`, paddingTop: 10 } },
+                        React.createElement("div", { style: { fontWeight: 800, fontSize: 13, marginBottom: 6 } },
+                            "Piquage " + (i + 1) + " \u00B7 sortie " + n.dir.replace("-", "\u2212") + (nozTilt(n) ? " \u00E0 45\u00B0 vers " + nozTilt(n).replace("-", "\u2212") : "") + " \u00B7 " + (n.kind === "bride" ? "\u00E0 bride" : "soud\u00E9") + (axial ? " \u00B7 sur le fond" : "")),
+                        React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap" } },
+                            cell(axial ? "Position (fond)" : "Position " + fromEnd, inp(axial ? null : n.mmPos, (v) => setN(n.id, { mmPos: v }), axial ? "\u2014" : defPos, axial)),
+                            cell(axial ? "Longueur depuis le fond" : "Longueur hors virole", inp(n.mmLen, (v) => setN(n.id, { mmLen: v }), defLen)),
+                            cell("DN", React.createElement("select", { value: n.dn || "", onInput: (e) => setN(n.id, { dn: e.target.value ? +e.target.value : null }), style: { ...fieldS, width: 90, background: "#fff" } },
+                                React.createElement("option", { value: "" }, "\u2014"),
+                                DN_LIST.map((d) => React.createElement("option", { key: d, value: d }, "DN" + d))))));
+                })));
+    })();
+    // ---- fenêtre de réglage d'un piquage d'appareil ----
+    // n'affiche que les options utiles selon le type de piquage : pas de
+    // position sur un fond, pas de collerette pour un piquage soudé…
+    const nozPopup = (() => {
+        const f = nozPop && fittings.find((x) => x.id === selFit);
+        if (!isApp3(f))
+            return null;
+        const idx = (f.noz || []).findIndex((n) => n.id === selNoz);
+        if (idx < 0)
+            return null;
+        const n = f.noz[idx];
+        const axial = nozIsAxial(f, n);
+        const tilt = nozTilt(n);
+        const canSlide = !axial && appAtMax(f) > 0;
+        const g = appReal(f, 1);
+        const q = g.noz[idx];
+        const ax = appAxis(f);
+        const close = () => { setNozPop(false); setSelNoz(null); };
+        const setNraw = (patch) => setFittings((ff) => ff.map((x) => (x.id === f.id ? { ...x, noz: (x.noz || []).map((m) => (m.id === n.id ? { ...m, ...patch } : m)) } : x)));
+        const num = (v) => (v === "" || v == null ? null : +v);
+        const lbl = (d) => d.replace("-", "\u2212");
+        // même esprit que les autres fenêtres iOS de l'appli : carte flottante
+        // compacte, contrôles segmentés, libellés gris à gauche
+        const W = Math.min(340, window.innerWidth - 16);
+        const r0 = nozAnchorRef.current;
+        const left = r0 ? Math.max(8, Math.min(window.innerWidth - W - 8, r0.left + r0.width / 2 - W / 2)) : 8;
+        const bottom = r0 ? Math.max(8, window.innerHeight - r0.top + 8) : 90;
+        const ox = r0 ? Math.round(r0.left + r0.width / 2 - left) + "px" : "50%";
+        const seg = (opts, value, onChange) => React.createElement("div", { style: { display: "flex", background: "rgba(118,118,128,0.14)", borderRadius: 8, padding: 2, gap: 1, flexShrink: 0 } },
+            opts.map(([v, t, title]) => React.createElement("button", { key: String(v), title, onClick: () => onChange(v), style: {
+                    border: "none", borderRadius: 6, padding: "5px 7px", minWidth: 28, fontFamily: IOS_FONT, fontSize: 13.5,
+                    fontWeight: value === v ? 600 : 400, color: "#000", cursor: "pointer",
+                    background: value === v ? "#fff" : "transparent",
+                    boxShadow: value === v ? "0 1px 4px rgba(0,0,0,0.14)" : "none",
+                } }, t)));
+        const step = (t, onClick, title) => React.createElement("button", { title, onClick, style: {
+                border: "none", borderRadius: 7, width: 34, height: 28, background: "rgba(118,118,128,0.14)",
+                fontSize: 15, fontWeight: 600, color: "#000", cursor: "pointer", flexShrink: 0,
+            } }, t);
+        const rowI = (label, ...kids) => React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, padding: "5px 12px", borderTop: "0.5px solid rgba(60,60,67,0.18)" } },
+            React.createElement("span", { style: { width: 70, flexShrink: 0, fontSize: 12.5, color: "#6C6C70", fontFamily: IOS_FONT } }, label),
+            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0, overflowX: "auto" } }, ...kids));
+        const mmIn = (value, onChange, ph) => React.createElement("input", { type: "number", inputMode: "decimal", className: "no-spin", value: value == null ? "" : value, placeholder: ph, onInput: (e) => onChange(num(e.target.value)), style: {
+                width: 84, boxSizing: "border-box", padding: "4px 8px", fontSize: 16, borderRadius: 7,
+                border: "0.5px solid rgba(60,60,67,0.3)", background: "#fff", fontFamily: IOS_FONT, flexShrink: 0,
+            } });
+        return React.createElement(React.Fragment, null,
+            React.createElement("div", { className: "ios-dim", onClick: close, style: { position: "fixed", inset: 0, zIndex: 29, background: "rgba(0,0,0,0.12)" } }),
+            // hauteur limitée aux réglages du croquis : la partie « Rendu 3D »
+            // se découvre en faisant glisser le contenu de la fenêtre, pour
+            // laisser le dessin visible au-dessus
+            React.createElement("div", { className: "ios-menu up", style: { ...menuBox, width: W, left, bottom, top: "auto", "--ox": ox, maxHeight: Math.max(160, Math.min(292, window.innerHeight - bottom - 60)), overflowY: "auto", WebkitOverflowScrolling: "touch", overscrollBehavior: "contain", touchAction: "pan-y" } },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, padding: "9px 12px 7px", position: "sticky", top: 0, zIndex: 1, background: "#F9F9FB", borderBottom: "0.5px solid rgba(60,60,67,0.18)" } },
+                    React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                        React.createElement("div", { style: { fontWeight: 600, fontSize: 15, color: "#000" } }, "Piquage " + (idx + 1)),
+                        React.createElement("div", { style: { fontSize: 11.5, color: "#6C6C70", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } },
+                            fitLabel(f) + " \u00B7 sortie " + lbl(n.dir) + (tilt ? " \u00E0 45\u00B0" : "") + (axial ? " (fond)" : ""))),
+                    React.createElement("button", { title: "Supprimer le piquage", "aria-label": "Supprimer le piquage", onClick: () => { removeNoz(); close(); }, style: { border: "none", background: "rgba(255,59,48,0.12)", color: "#FF3B30", borderRadius: 8, width: 32, height: 30, fontSize: 15, fontWeight: 700, cursor: "pointer", flexShrink: 0 } }, "\u2715"),
+                    React.createElement("button", { onClick: close, style: { border: "none", background: COLORS.ink, color: "#fff", borderRadius: 8, height: 30, padding: "0 12px", fontSize: 14, fontWeight: 600, cursor: "pointer", flexShrink: 0 } }, "OK")),
+                rowI("Type", seg([["bride", "Bride"], ["soude", "Soud\u00E9"]], n.kind, (v) => updateNoz(() => ({ kind: v })))),
+                rowI("Sortie", seg(NOZ_DIRS.map((d) => [d, lbl(d), d[1] === ax ? "Sortie sur le fond" : "Sortie sur la virole"]), n.dir, (d) => updateNoz((m) => ({ dir: d, ext: 0, tilt: m.tilt && m.tilt[1] === d[1] ? null : m.tilt })))),
+                rowI("Incliné 45\u00B0", seg([[null, "Non"], ...NOZ_DIRS.filter((d) => d[1] !== n.dir[1]).map((d) => [d, lbl(d), "Incliner \u00E0 45\u00B0 vers " + d])], tilt || null, (d) => updateNoz(() => ({ tilt: d, ext: 0 })))),
+                canSlide && rowI("Position",
+                    step("\u25C0", () => updateNoz((m) => ({ at: (m.at || 0) - 1 })), "Glisser vers \u2212" + ax),
+                    step("\u25B6", () => updateNoz((m) => ({ at: (m.at || 0) + 1 })), "Glisser vers +" + ax)),
+                rowI("Longueur",
+                    step("\u2212", () => updateNoz((m) => ({ ext: nozFix(f, m).ext - 1 })), "Raccourcir"),
+                    step("+", () => updateNoz((m) => ({ ext: nozFix(f, m).ext + 1 })), "Allonger")),
+                n.kind === "bride" && rowI("Collerette", seg(nozFlangeOpts(n).map((a) => [a, a === "diag" ? "Diag." : a, a === "diag" ? "Trait suivant la diagonale" : "Trait suivant l'axe " + a]), nozFlangeCur(f, n), (a) => updateNoz(() => ({ fAx: a })))),
+                React.createElement("div", { style: { padding: "8px 12px 3px", fontSize: 11.5, fontWeight: 600, color: "#6C6C70", letterSpacing: 0.3, borderTop: "0.5px solid rgba(60,60,67,0.18)", background: "rgba(118,118,128,0.06)" } },
+                    "RENDU 3D (mm)",
+                    React.createElement("div", { style: { fontWeight: 400, letterSpacing: 0, marginTop: 1 } }, (axial ? "" : "position depuis le fond " + (ax === "Z" ? "bas" : "\u2212" + ax) + " \u00B7 ") + "longueur " + (axial ? "depuis le fond" : "hors virole") + " \u00B7 vide = croquis")),
+                !axial && rowI("Position", mmIn(n.mmPos, (v) => setNraw({ mmPos: v }), Math.round((q.t0 + g.h) * 100))),
+                rowI("Longueur", mmIn(n.mmLen, (v) => setNraw({ mmLen: v }), Math.round(Math.hypot(q.end.x - q.base.x, q.end.y - q.base.y, q.end.z - q.base.z) * 100))),
+                rowI("DN", React.createElement("select", { value: n.dn || "", onInput: (e) => setNraw({ dn: e.target.value ? +e.target.value : null }), style: { width: 92, padding: "4px 6px", fontSize: 16, borderRadius: 7, border: "0.5px solid rgba(60,60,67,0.3)", background: "#fff", fontFamily: IOS_FONT, flexShrink: 0 } },
+                    React.createElement("option", { value: "" }, "\u2014"),
+                    DN_LIST.map((d) => React.createElement("option", { key: d, value: d }, "DN" + d))))));
+    })();
     const settingsMenu = settingsAnchor && React.createElement(React.Fragment, null,
         dimLayer,
         React.createElement("div", { className: "ios-menu" + (menuClosing ? " closing" : ""), style: { ...menuBox, top: settingsAnchor.top, right: settingsAnchor.right } }, showPrintPanel ? settingsPrintPanel : settingsMenuList));
@@ -9919,11 +10121,11 @@ function IsoChantier() {
                 } }, "\u2715 Annuler le premier point"))),
         mode === "add" && !textTool && !selectedFitting && APPAREIL_TYPES.has(addType.type) && (React.createElement("div", { style: {
                 background: COLORS.sheet, padding: "8px 12px",
-                display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap",
+                ...rowS,
             } },
-            React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "Orientation :"),
-            [["X", "\u00E0 plat X"], ["Y", "\u00E0 plat Y"], ["Z", "vertical Z"]].map(([ax, lbl]) => React.createElement("button", { key: ax, style: addAxis3d === ax ? chipOn : chip, onClick: () => setAddAxis3d(ax), title: lbl }, ax)),
-            React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "Z = vertical \u00B7 \u00D8/long. r\u00E9glables apr\u00E8s pose"))),
+            React.createElement("span", { style: labS }, "Orientation"),
+            [["X", "Couch\u00E9 suivant X"], ["Y", "Couch\u00E9 suivant Y"], ["Z", "Debout (Z)"]].map(([ax, lbl]) => React.createElement("button", { key: ax, style: addAxis3d === ax ? { ...cbOn, flexShrink: 0 } : cbx, onClick: () => setAddAxis3d(ax), title: lbl }, ax)),
+            React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace", flexShrink: 0 } }, "Z = debout"))),
         dim && mode === "cote" && (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: { display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap" } },
             React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Cote (mm)", width: 104, autoFocus: true, value: dim.value || "", onInput: (e) => updateDim({ value: e.target.value ? +e.target.value : null }), hidden: !!dim.hidden, onToggleHidden: dim.value != null ? () => updateDim({ hidden: !dim.hidden }) : null }),
             React.createElement("button", { style: cb, title: "Changer de c\u00F4t\u00E9", onClick: () => updateDim({ flip: !dim.flip }) }, "\u21C4"),
@@ -9936,22 +10138,22 @@ function IsoChantier() {
                 padding: "10px 12px calc(10px + 0px)", display: "flex", flexDirection: "column", gap: 8,
             } }, isTextSel ? (React.createElement(React.Fragment, null,
             React.createElement("input", { type: "text", value: selectedFitting.text || "", onInput: (e) => updateFit({ text: e.target.value }), placeholder: "Votre texte\u2026", style: { ...field } }),
-            React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("button", { style: { ...(selectedFitting.bold ? chipOn : chip), minWidth: 40 }, onClick: () => updateFit({ bold: !selectedFitting.bold }) },
+            React.createElement("div", { style: rowS },
+                React.createElement("button", { style: { ...(selectedFitting.bold ? cbOn : cb), flexShrink: 0 }, onClick: () => updateFit({ bold: !selectedFitting.bold }) },
                     React.createElement("b", null, "G")),
-                React.createElement("button", { style: { ...(selectedFitting.italic ? chipOn : chip), minWidth: 40 }, onClick: () => updateFit({ italic: !selectedFitting.italic }) },
+                React.createElement("button", { style: { ...(selectedFitting.italic ? cbOn : cb), flexShrink: 0 }, onClick: () => updateFit({ italic: !selectedFitting.italic }) },
                     React.createElement("i", null, "I")),
-                React.createElement("button", { style: { ...(selectedFitting.ul ? chipOn : chip), minWidth: 40 }, onClick: () => updateFit({ ul: !selectedFitting.ul }) },
+                React.createElement("button", { style: { ...(selectedFitting.ul ? cbOn : cb), flexShrink: 0 }, onClick: () => updateFit({ ul: !selectedFitting.ul }) },
                     React.createElement("u", null, "S")),
                 React.createElement(ColorSwatch, { title: "Couleur du texte", value: selectedFitting.color || COLORS.ink, onChange: (col) => updateFit({ color: col }) }),
                 React.createElement("span", { style: { width: 1, height: 26, background: COLORS.gridStrong, margin: "0 2px" } }),
-                React.createElement("button", { style: { ...sideBtn, fontSize: 12 }, onClick: () => updateFit({ size: Math.max(7, (selectedFitting.size || 13) - 2) }) }, "A\u2212"),
-                React.createElement("span", { style: { minWidth: 26, textAlign: "center", fontSize: 13, fontWeight: 700, color: COLORS.cote } }, selectedFitting.size || 13),
-                React.createElement("button", { style: sideBtn, onClick: () => updateFit({ size: Math.min(40, (selectedFitting.size || 13) + 2) }) }, "A+"),
-                React.createElement("button", { style: { ...chip, marginLeft: "auto", borderColor: "#B3341C", color: "#B3341C" }, onClick: () => removeFitting(selFit) }, "\uD83D\uDDD1"))))
+                React.createElement("button", { style: cbx, onClick: () => updateFit({ size: Math.max(7, (selectedFitting.size || 13) - 2) }) }, "A\u2212"),
+                React.createElement("span", { style: { minWidth: 22, textAlign: "center", fontSize: 13, fontWeight: 700, color: COLORS.cote, flexShrink: 0 } }, selectedFitting.size || 13),
+                React.createElement("button", { style: cbx, onClick: () => updateFit({ size: Math.min(40, (selectedFitting.size || 13) + 2) }) }, "A+"),
+                React.createElement("button", { title: "Supprimer", style: { ...cbDel, marginLeft: "auto" }, onClick: () => removeFitting(selFit) }, "\u2715"))))
             : (React.createElement("span", { style: { fontSize: 12.5, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "Touchez le plan pour placer une zone de texte")))),
         selectedFitting && (mode === "select" || (mode === "add" && !textTool)) && (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: {
-                display: "flex", flexDirection: "column", gap: 10,
+                display: "flex", flexDirection: "column", gap: 8,
                 maxHeight: "48vh", overflowY: "auto",
             } },
             React.createElement("span", { style: { fontWeight: 800, fontSize: 12, letterSpacing: 1, color: COLORS.cote, marginBottom: -4 } }, fitLabel(selectedFitting).toUpperCase()),
@@ -9970,7 +10172,8 @@ function IsoChantier() {
                     React.createElement("button", { style: cb, onClick: () => cycleBranch(-1) }, "\u27F2"),
                     React.createElement("button", { style: cb, onClick: () => cycleBranch(1) }, "\u27F3"))) : isApp3(selectedFitting) ? (React.createElement(React.Fragment, null,
                     [["X", "Couch\u00E9 suivant X"], ["Y", "Couch\u00E9 suivant Y"], ["Z", "Debout (Z)"]].map(([ax, lbl]) => React.createElement("button", { key: ax, style: appAxis(selectedFitting) === ax ? cbOn : cb, onClick: () => updateApp((f) => ({ ...f, axis3d: ax })), title: lbl }, ax)),
-                    selectedFitting.type === "circulateur" && React.createElement("button", { style: selectedFitting.flip ? cbOn : cb, title: "Sens du flux", onClick: () => updateApp((f) => ({ ...f, flip: !f.flip })) }, "\u21C4"))) : isStructSel ? (React.createElement(React.Fragment, null,
+                    selectedFitting.type === "circulateur" && React.createElement("button", { style: selectedFitting.flip ? cbOn : cb, title: "Sens du flux", onClick: () => updateApp((f) => ({ ...f, flip: !f.flip })) }, "\u21C4"),
+                    React.createElement("button", { style: { ...cb, flexShrink: 0, fontWeight: 800 }, title: "Dimensions r\u00E9elles (rendu 3D)", onClick: () => { snapshot(); setAppDimOpen(true); } }, "3D"))) : isStructSel ? (React.createElement(React.Fragment, null,
                     (selectedFitting.type === "mur" ? [["X", "Voile suivant X"], ["Y", "Voile suivant Y"]]
                         : selectedFitting.type === "tremie" ? [["H", "Trémie au sol"], ["X", "Trémie dans voile X"], ["Y", "Trémie dans voile Y"]]
                             : []).map(([v, t]) => React.createElement("button", { key: v, style: gcPlane(selectedFitting) === v ? cbOn : cb, title: t, onClick: () => updateFit({ pl: v, rot: 0 }) }, v === "H" ? "Sol" : v)))) : selectedFitting.type === "soudure" ? null : (React.createElement(React.Fragment, null,
@@ -9994,18 +10197,15 @@ function IsoChantier() {
                 React.createElement(ColorSwatch, { title: "Couleur", value: selectedFitting.color || (isStructSel ? COLORS.structure : isApp3(selectedFitting) ? APP_COL.stroke : COLORS.ink), onChange: (c) => updateFit({ color: c }) }),
                 React.createElement("button", { title: "Dupliquer", "aria-label": "Dupliquer", style: { ...cb, marginLeft: "auto", fontSize: 20 }, onClick: () => duplicateSelection([], [selFit]) }, "+"),
                 React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: () => removeFitting(selFit), style: { ...cb, fontSize: 17, borderColor: "#B3341C", color: "#B3341C" } }, "\u2715")),
-            selectedFitting.type === "teoduit" && (React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontSize: 12, color: COLORS.cote } }, "DN du piquage r\u00E9duit :"),
+            selectedFitting.type === "teoduit" && (React.createElement("div", { style: rowS },
+                React.createElement("span", { style: labS }, "DN piquage"),
                 React.createElement("select", { value: selectedFitting.branchDn || "", onInput: (e) => updateFit({ branchDn: e.target.value ? +e.target.value : null }), style: { padding: "8px 10px", borderRadius: 8, border: `1.4px solid ${COLORS.ink}`, fontSize: 16, background: "#fff" } },
                     React.createElement("option", { value: "" }, "= DN ligne"),
-                    DN_LIST.map((d) => React.createElement("option", { key: d, value: d }, "DN", d))),
-                React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "n'affecte pas le DN du tron\u00E7on"))),
+                    DN_LIST.map((d) => React.createElement("option", { key: d, value: d }, "DN", d))))),
             isApp3(selectedFitting) && (() => {
                 const f = selectedFitting;
                 const lab = (t) => React.createElement("span", { style: { fontSize: 12, fontWeight: 800, color: COLORS.cote, marginLeft: 4 } }, t);
                 const row = (kids) => React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap", overflowX: "auto" } }, ...kids);
-                const nz = (f.noz || []).find((n) => n.id === selNoz);
-                const nzAxial = nz && (nozIsAxial(f, nz) || appAtMax(f) === 0);
                 return React.createElement(React.Fragment, null,
                     row([
                         lab("\u00D8"),
@@ -10020,64 +10220,47 @@ function IsoChantier() {
                     ]),
                     row([
                         lab("PIQUAGES"),
-                        ...(f.noz || []).map((n, i) => React.createElement("button", { key: n.id, style: n.id === selNoz ? cbOn : cb, title: n.kind === "bride" ? "Piquage \u00E0 bride" : "Piquage soud\u00E9", onClick: () => setSelNoz(n.id === selNoz ? null : n.id) }, String(i + 1))),
-                        React.createElement("button", { key: "addB", style: { ...cb, padding: "0 10px" }, onClick: () => addNozzle("bride") }, "+ Bride"),
-                        React.createElement("button", { key: "addS", style: { ...cb, padding: "0 10px" }, onClick: () => addNozzle("soude") }, "+ Soud\u00E9"),
-                    ]),
-                    nz && row([
-                        ...NOZ_DIRS.map((d) => React.createElement("button", { key: d, style: nz.dir === d ? cbOn : cb, title: "Sortie vers " + d, onClick: () => updateNoz(() => ({ dir: d, ext: 0 })) }, d.replace("-", "\u2212"))),
-                    ]),
-                    nz && nz.kind === "bride" && row([
-                        lab("Collerette"),
-                        ...["X", "Y", "Z"].filter((a) => a !== nz.dir[1]).map((a) => {
-                            const cur = nz.fAx && nz.fAx !== nz.dir[1] ? nz.fAx : nozFlangeAxis(f, nz);
-                            return React.createElement("button", { key: "fa" + a, style: cur === a ? cbOn : cb, title: "Trait suivant l'axe " + a, onClick: () => updateNoz(() => ({ fAx: a })) }, a);
-                        }),
-                    ]),
-                    nz && row([
-                        lab("Pos."),
-                        React.createElement("button", { key: "p-", style: { ...cb, opacity: nzAxial ? 0.35 : 1 }, disabled: nzAxial, title: "Glisser le long de l'appareil", onClick: () => updateNoz((n) => ({ at: (n.at || 0) - 1 })) }, "\u25C0"),
-                        React.createElement("button", { key: "p+", style: { ...cb, opacity: nzAxial ? 0.35 : 1 }, disabled: nzAxial, title: "Glisser le long de l'appareil", onClick: () => updateNoz((n) => ({ at: (n.at || 0) + 1 })) }, "\u25B6"),
-                        lab("Long."),
-                        React.createElement("button", { key: "e-", style: cb, title: "Raccourcir", onClick: () => updateNoz((n) => ({ ext: nozFix(f, n).ext - 1 })) }, "\u2212"),
-                        React.createElement("button", { key: "e+", style: cb, title: "Allonger", onClick: () => updateNoz((n) => ({ ext: nozFix(f, n).ext + 1 })) }, "+"),
-                        React.createElement("button", { key: "k", style: { ...cb, padding: "0 10px" }, title: "Bride / soud\u00E9", onClick: () => updateNoz((n) => ({ kind: n.kind === "bride" ? "soude" : "bride" })) }, nz.kind === "bride" ? "Bride" : "Soud\u00E9"),
-                        React.createElement("button", { key: "x", title: "Supprimer le piquage", "aria-label": "Supprimer le piquage", onClick: removeNoz, style: { ...cb, marginLeft: "auto", fontSize: 17, borderColor: "#B3341C", color: "#B3341C" } }, "\u2715"),
+                        ...(f.noz || []).map((n, i) => React.createElement("button", { key: n.id, style: n.id === selNoz && nozPop ? cbOn : cb, title: "R\u00E9gler le piquage " + (i + 1), onClick: (e) => { nozAnchorRef.current = e.currentTarget.getBoundingClientRect(); snapshot(); setSelNoz(n.id); setNozPop(true); } }, String(i + 1))),
+                        React.createElement("button", { key: "addN", style: { ...cb, padding: "0 10px", flexShrink: 0 }, onClick: (e) => { nozAnchorRef.current = e.currentTarget.getBoundingClientRect(); addNozzle("bride"); setNozPop(true); } }, "+ Piquage"),
                     ]));
             })(),
-            selectedFitting.type === "texte" && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("input", { type: "text", value: selectedFitting.text || "", onInput: (e) => updateFit({ text: e.target.value }), placeholder: "Votre texte\u2026", style: { ...field, width: 160, flexGrow: 1 } }),
-                React.createElement("button", { style: sideBtn, onClick: () => updateFit({ size: Math.min(40, (selectedFitting.size || 13) + 2) }) }, "A+"),
-                React.createElement("button", { style: { ...sideBtn, fontSize: 12 }, onClick: () => updateFit({ size: Math.max(7, (selectedFitting.size || 13) - 2) }) }, "A\u2212"),
-                React.createElement("button", { style: selectedFitting.bold ? chipOn : chip, onClick: () => updateFit({ bold: !selectedFitting.bold }) },
+            selectedFitting.type === "texte" && React.createElement("input", { type: "text", value: selectedFitting.text || "", onInput: (e) => updateFit({ text: e.target.value }), placeholder: "Votre texte\u2026", style: { ...field } }),
+            selectedFitting.type === "texte" && (React.createElement("div", { style: rowS },
+                React.createElement("button", { style: cbx, onClick: () => updateFit({ size: Math.max(7, (selectedFitting.size || 13) - 2) }) }, "A\u2212"),
+                React.createElement("span", { style: { minWidth: 22, textAlign: "center", fontSize: 13, fontWeight: 700, color: COLORS.cote, flexShrink: 0 } }, selectedFitting.size || 13),
+                React.createElement("button", { style: cbx, onClick: () => updateFit({ size: Math.min(40, (selectedFitting.size || 13) + 2) }) }, "A+"),
+                React.createElement("button", { style: selectedFitting.bold ? { ...cbOn, flexShrink: 0 } : cbx, onClick: () => updateFit({ bold: !selectedFitting.bold }) },
                     React.createElement("b", null, "G")),
-                React.createElement("button", { style: selectedFitting.italic ? chipOn : chip, onClick: () => updateFit({ italic: !selectedFitting.italic }) },
+                React.createElement("button", { style: selectedFitting.italic ? { ...cbOn, flexShrink: 0 } : cbx, onClick: () => updateFit({ italic: !selectedFitting.italic }) },
                     React.createElement("i", null, "I")),
-                React.createElement("button", { style: selectedFitting.ul ? chipOn : chip, onClick: () => updateFit({ ul: !selectedFitting.ul }) },
+                React.createElement("button", { style: selectedFitting.ul ? { ...cbOn, flexShrink: 0 } : cbx, onClick: () => updateFit({ ul: !selectedFitting.ul }) },
                     React.createElement("u", null, "S")),
-                React.createElement("button", { style: selectedFitting.hl ? chipOn : chip, onClick: () => updateFit({ hl: !selectedFitting.hl }) }, "Surligner"))),
-            isShapeSel && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("button", { style: selectedFitting.filled ? chipOn : chip, onClick: () => updateFit({ filled: !selectedFitting.filled }) }, selectedFitting.filled ? "Plein" : "Contour"),
-                React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "TRAIT :"),
-                [0.5, 1, 2, 3.5, 5].map((w) => (React.createElement("button", { key: w, style: (selectedFitting.sw || 2) === w ? chipOn : chip, onClick: () => updateFit({ sw: w }) }, String(w).replace(".", ",")))))),
-            isShapeSel && selectedFitting.shape === "fleche" && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "FL\u00C8CHE :"),
-                [[1, "Fine"], [2, "Moyenne"], [3, "Standard"]].map(([v, lbl]) => (React.createElement("button", { key: v, style: (selectedFitting.ath || 3) === v ? chipOn : chip, onClick: () => updateFit({ ath: v }) }, lbl))))),
-            isPenteSel && (React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: COLORS.cote } }, "Pente :"),
+                React.createElement("button", { style: { ...(selectedFitting.hl ? cbOn : cb), flexShrink: 0, padding: "0 8px" }, title: "Surligner", onClick: () => updateFit({ hl: !selectedFitting.hl }) }, "Surl."))),
+            isShapeSel && (React.createElement("div", { style: rowS },
+                React.createElement("button", { style: { ...(selectedFitting.filled ? cbOn : cb), flexShrink: 0, padding: "0 10px" }, onClick: () => updateFit({ filled: !selectedFitting.filled }) }, selectedFitting.filled ? "Plein" : "Contour"),
+                React.createElement("span", { style: labS }, "Trait"),
+                [0.5, 1, 2, 3.5, 5].map((w) => (React.createElement("button", { key: w, style: (selectedFitting.sw || 2) === w ? { ...cbOn, flexShrink: 0 } : cbx, onClick: () => updateFit({ sw: w }) }, String(w).replace(".", ",")))))),
+            isShapeSel && selectedFitting.shape === "fleche" && (React.createElement("div", { style: rowS },
+                React.createElement("span", { style: labS }, "Fl\u00E8che"),
+                [[1, "Fine"], [2, "Moyenne"], [3, "Standard"]].map(([v, lbl]) => (React.createElement("button", { key: v, style: { ...((selectedFitting.ath || 3) === v ? cbOn : cb), flexShrink: 0, padding: "0 10px" }, onClick: () => updateFit({ ath: v }) }, lbl))))),
+            isPenteSel && (React.createElement("div", { style: rowS },
+                React.createElement("span", { style: labS }, "Pente"),
                 React.createElement("input", { style: { ...field, width: 90 }, placeholder: "ex. 1,5", inputMode: "decimal", value: selectedFitting.val || "", onInput: (e) => updateFit({ val: e.target.value }) }),
                 React.createElement("span", { style: { fontSize: 14, fontWeight: 700 } }, "%"))))),
-        elbowSel && !selectedFitting && mode === "select" && (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
-            React.createElement("span", { style: { fontWeight: 800, fontSize: 13, letterSpacing: 1 } },
-                "COUDE (",
+        elbowSel && !selectedFitting && mode === "select" && (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: { display: "flex", flexDirection: "column", gap: 8 } },
+            React.createElement("div", { style: rowS },
+            React.createElement("span", { style: labS },
+                "Coude ",
                 elbowSel.geoAng,
-                "\u00B0 g\u00E9om.)"),
-            React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Angle r\u00E9el (\u00B0)", width: 110, value: elbowModSel.angle || "", onInput: (e) => updateElbowMod({ angle: e.target.value ? +e.target.value : null, noTri: true }), hidden: !!elbowModSel.angleHidden, onToggleHidden: elbowModSel.angle != null ? () => updateElbowMod({ angleHidden: !elbowModSel.angleHidden }) : null }),
+                "\u00B0"),
+            React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Angle (\u00B0)", width: 104, value: elbowModSel.angle || "", onInput: (e) => updateElbowMod({ angle: e.target.value ? +e.target.value : null, noTri: true }), hidden: !!elbowModSel.angleHidden, onToggleHidden: elbowModSel.angle != null ? () => updateElbowMod({ angleHidden: !elbowModSel.angleHidden }) : null }),
             React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Corde (mm)", width: 100, value: elbowModSel.chord || "", onInput: (e) => updateElbowMod({ chord: e.target.value ? +e.target.value : null }), hidden: !!elbowModSel.chordHidden, onToggleHidden: elbowModSel.chord != null ? () => updateElbowMod({ chordHidden: !elbowModSel.chordHidden }) : null }),
+            ),
+            (elbowModSel.angle != null || elbowModSel.chord != null) && React.createElement("div", { style: rowS },
             React.createElement("button", { style: chip, onClick: resetElbowMod }, "R\u00E9init."),
             elbowModSel.angle != null && (React.createElement(React.Fragment, null,
                 React.createElement("button", { style: chip, onClick: () => updateElbowMod({ hflip: !elbowModSel.hflip }) }, "Hachures"),
-                React.createElement("button", { style: elbowModSel.noTri ? chip : chipOn, onClick: () => updateElbowMod({ noTri: !elbowModSel.noTri }) }, elbowModSel.noTri ? "+ Triangle" : "Retirer"))),
+                React.createElement("button", { style: elbowModSel.noTri ? chip : chipOn, onClick: () => updateElbowMod({ noTri: !elbowModSel.noTri }) }, elbowModSel.noTri ? "+ Triangle" : "Retirer")))),
             (() => {
                 // encombrement (longueur au centre) = R × tan(angle/2)
                 // 3D : R = 1,5 × NPS ; 5D : R = 2,5 × NPS
@@ -10131,56 +10314,57 @@ function IsoChantier() {
                 snapshot();
                 setSegments((ss) => ss.map((x) => (x.id === selSegCote ? { ...x, ...patch } : x)));
             };
-            return (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: {
-                    display: "flex", flexDirection: "column", gap: 10,
-                    maxHeight: "48vh", overflowY: "auto",
-                } },
-                React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
-                    React.createElement("span", { style: { fontWeight: 800, fontSize: 13, letterSpacing: 1 } }, "COTE DU TUBE"),
-                    React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Cote (mm)", width: 110, value: s.cote || "", onInput: (e) => setSC({ cote: e.target.value ? +e.target.value : null }), hidden: !!s.coteHidden, onToggleHidden: s.cote != null ? () => setSC({ coteHidden: !s.coteHidden }) : null }),
-                    React.createElement("button", { style: { ...chip, marginLeft: "auto" }, onClick: () => { setSelSeg(selSegCote); setSelSegCote(null); } }, "S\u00E9lectionner le tube")),
-                React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                    React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "POSITION :"),
-                    React.createElement("button", { style: chip, onClick: () => setSC({ flip: !s.flip }) }, "\u21C4"),
-                    React.createElement("button", { style: chip, onClick: () => setSC({ extAlt: !s.extAlt }) }, "\u2195"),
-                    React.createElement("button", { style: chip, onClick: () => setSC({ coff: Math.max(-12, (s.coff || 0) - 8) }) }, "Rapprocher"),
-                    React.createElement("button", { style: chip, onClick: () => setSC({ coff: Math.min(80, (s.coff || 0) + 8) }) }, "\u00C9loigner"),
-                    (s.tox || s.toy) ? (React.createElement("button", { style: chip, onClick: () => setSC({ tox: 0, toy: 0 }) }, "Texte au centre")) : null)));
+            return (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: rowS },
+                React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Cote (mm)", width: 104, value: s.cote || "", onInput: (e) => setSC({ cote: e.target.value ? +e.target.value : null }), hidden: !!s.coteHidden, onToggleHidden: s.cote != null ? () => setSC({ coteHidden: !s.coteHidden }) : null }),
+                React.createElement("button", { style: cbx, title: "Changer de c\u00F4t\u00E9", onClick: () => setSC({ flip: !s.flip }) }, "\u21C4"),
+                React.createElement("button", { style: cbx, title: "Autre ligne d'attache", onClick: () => setSC({ extAlt: !s.extAlt }) }, "\u2195"),
+                React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "Rapprocher", onClick: () => setSC({ coff: Math.max(-12, (s.coff || 0) - 8) }) }, "\u2212"),
+                React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "\u00C9loigner", onClick: () => setSC({ coff: Math.min(80, (s.coff || 0) + 8) }) }, "+"),
+                (s.tox || s.toy) ? React.createElement("button", { style: cbx, title: "Texte au centre", onClick: () => setSC({ tox: 0, toy: 0 }) }, "\u2316") : null,
+                React.createElement("button", { style: { ...cbx, marginLeft: "auto", padding: "0 10px" }, title: "S\u00E9lectionner le tube", onClick: () => { setSelSeg(selSegCote); setSelSegCote(null); } }, "Tube")));
         })(),
         seg && !elbowSel && !selectedFitting && mode === "select" && (React.createElement(CollapsiblePanel, { collapsed: panelCollapsed, onSetCollapsed: setPanelCollapsed, dragRef: panelDragRef, contentStyle: {
-                display: "flex", flexDirection: "column", gap: 10,
+                display: "flex", flexDirection: "column", gap: 8,
                 maxHeight: "48vh", overflowY: "auto",
             } },
-            React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontWeight: 800, fontSize: 13, letterSpacing: 1 } },
-                    "TRON\u00C7ON",
-                    seg.casse ? (seg.casse.kind === "casse" ? " · CASSE" : " · 45°") : ""),
-                React.createElement("select", { value: seg.dn || "", onInput: (e) => propagateDn(selSeg, e.target.value ? +e.target.value : null), style: { padding: "8px 10px", borderRadius: 8, border: `1.4px solid ${COLORS.ink}`, fontSize: 16, background: "#fff" } },
+            // ligne 1 : DN, cote, couleur, options, dupliquer, supprimer
+            React.createElement("div", { style: rowS },
+                React.createElement("select", { value: seg.dn || "", title: "DN du tron\u00E7on", onInput: (e) => propagateDn(selSeg, e.target.value ? +e.target.value : null), style: { padding: "8px 4px", borderRadius: 8, border: `1.4px solid ${COLORS.ink}`, fontSize: 16, background: "#fff", width: 86, flexShrink: 0 } },
                     React.createElement("option", { value: "" }, "DN ?"),
                     DN_LIST.map((d) => React.createElement("option", { key: d, value: d },
                         "DN",
                         d))),
-                React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Cote (mm)", width: 100, value: seg.cote || "", onInput: (e) => updateSeg({ cote: e.target.value ? +e.target.value : null }), hidden: !!seg.coteHidden, onToggleHidden: seg.cote != null ? () => updateSeg({ coteHidden: !seg.coteHidden }) : null }),
-                React.createElement(TextField, { placeholder: "Nom tron\u00E7on", width: 130, value: seg.name || "", onInput: (e) => updateSeg({ name: e.target.value || null }), hidden: !!seg.nameHidden, onToggleHidden: seg.name ? () => updateSeg({ nameHidden: !seg.nameHidden }) : null }),
+                React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "Cote", width: 96, value: seg.cote || "", onInput: (e) => updateSeg({ cote: e.target.value ? +e.target.value : null }), hidden: !!seg.coteHidden, onToggleHidden: seg.cote != null ? () => updateSeg({ coteHidden: !seg.coteHidden }) : null }),
                 React.createElement(ColorSwatch, { title: "Couleur du tube", value: seg.color || COLORS.pipe, onChange: (c) => updateSeg({ color: c }) }),
-                React.createElement("button", { title: "Dupliquer", "aria-label": "Dupliquer", style: { ...chip, marginLeft: "auto", minWidth: 46, fontSize: 20, lineHeight: 1, padding: "7px 12px" }, onClick: () => duplicateSelection([selSeg], []) }, "+"),
-                React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: deleteSeg, style: { ...chip, minWidth: 46, fontSize: 17, lineHeight: 1, padding: "7px 12px", borderColor: "#B3341C", color: "#B3341C" } }, "\u2715")),
-            seg.cote != null && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "COTE :"),
-                React.createElement("button", { style: chip, onClick: () => updateSeg({ flip: !seg.flip }) }, "\u21C4"),
-                React.createElement("button", { style: chip, onClick: () => updateSeg({ extAlt: !seg.extAlt }) }, "\u2195"),
-                React.createElement("button", { style: chip, onClick: () => updateSeg({ coff: Math.max(-12, (seg.coff || 0) - 8) }) }, "Rapprocher"),
-                React.createElement("button", { style: chip, onClick: () => updateSeg({ coff: Math.min(80, (seg.coff || 0) + 8) }) }, "\u00C9loigner"),
-                (seg.tox || seg.toy) ? (React.createElement("button", { style: chip, onClick: () => updateSeg({ tox: 0, toy: 0 }) }, "Texte au centre")) : null)),
+                React.createElement("button", { title: "Plus d'options (nom, casse, croisements\u2026)", style: { ...(segMore ? cbOn : cb), flexShrink: 0, position: "relative" }, onClick: () => setSegMore(!segMore) }, "\u22EF",
+                    (seg.casse || seg.doubleCasse) && !segMore && React.createElement("span", { style: { position: "absolute", top: 3, right: 3, width: 7, height: 7, borderRadius: 4, background: COLORS.accent } })),
+                React.createElement("button", { title: "Dupliquer", "aria-label": "Dupliquer", style: { ...cbx, marginLeft: "auto", fontSize: 20 }, onClick: () => duplicateSelection([selSeg], []) }, "+"),
+                React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: deleteSeg, style: cbDel }, "\u2715")),
+            // ligne 2 : position de la cote + allonger/raccourcir le tube
+            (seg.cote != null || segFreeEnd(seg)) && React.createElement("div", { style: rowS },
+                seg.cote != null && React.createElement(React.Fragment, null,
+                    React.createElement("span", { style: labS }, "Cote"),
+                    React.createElement("button", { style: cbx, title: "Changer de c\u00F4t\u00E9", onClick: () => updateSeg({ flip: !seg.flip }) }, "\u21C4"),
+                    React.createElement("button", { style: cbx, title: "Autre ligne d'attache", onClick: () => updateSeg({ extAlt: !seg.extAlt }) }, "\u2195"),
+                    React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "Rapprocher", onClick: () => updateSeg({ coff: Math.max(-12, (seg.coff || 0) - 8) }) }, "\u2212"),
+                    React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "\u00C9loigner", onClick: () => updateSeg({ coff: Math.min(80, (seg.coff || 0) + 8) }) }, "+"),
+                    (seg.tox || seg.toy) ? React.createElement("button", { style: cbx, title: "Texte au centre", onClick: () => updateSeg({ tox: 0, toy: 0 }) }, "\u2316") : null),
+                segFreeEnd(seg) && React.createElement(React.Fragment, null,
+                    React.createElement("span", { style: { ...labS, marginLeft: seg.cote != null ? 6 : 0 } }, "Tube"),
+                    React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "Allonger", onClick: () => stretchSeg(1) }, "+"),
+                    React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "Raccourcir", onClick: () => stretchSeg(-1) }, "\u2212"))),
+            segMore && React.createElement("div", { style: rowS },
+                React.createElement("span", { style: labS }, "Nom"),
+                React.createElement(TextField, { placeholder: "Nom tron\u00E7on", width: 180, value: seg.name || "", onInput: (e) => updateSeg({ name: e.target.value || null }), hidden: !!seg.nameHidden, onToggleHidden: seg.name ? () => updateSeg({ nameHidden: !seg.nameHidden }) : null })),
             (() => {
                 const P = nodes[seg.a], Q = nodes[seg.b];
-                if (!P || !Q || seg.casse)
+                if (!segMore || !P || !Q || seg.casse)
                     return null;
                 const delta = [Q.x - P.x, Q.y - P.y, Q.z - P.z];
                 if (isAxisDir(delta))
                     return null;
-                return (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                    React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "OBLIQUE :"),
+                return (React.createElement("div", { style: rowS },
+                    React.createElement("span", { style: labS }, "Oblique"),
                     React.createElement("button", { style: chip, onClick: () => updateSeg({ casse: { corner: cornerFor(P, Q), kind: "45" } }) }, "+ Triangle de casse")));
             })(),
             (() => {
@@ -10198,11 +10382,11 @@ function IsoChantier() {
                     return line && !!segIntersect2D(A0s, B0s, line[0], line[1]);
                 });
                 const crossings = [...segCrossings, ...gcCrossings];
-                if (crossings.length === 0)
+                if (!segMore || crossings.length === 0)
                     return null;
                 const gaps = seg.gaps || [];
-                return (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                    React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "CROISEMENT :"),
+                return (React.createElement("div", { style: rowS },
+                    React.createElement("span", { style: labS }, "Croisement"),
                     crossings.map((c, i) => {
                         const active = gaps.includes(c.id);
                         return (React.createElement("button", { key: c.id, style: active ? chipOn : chip, onClick: () => updateSeg({
@@ -10212,14 +10396,10 @@ function IsoChantier() {
                             crossings.length > 1 ? ` #${i + 1}` : ""));
                     })));
             })(),
-            React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "TUBE :"),
-                segFreeEnd(seg) ? (React.createElement(React.Fragment, null,
-                    React.createElement("button", { style: chip, onClick: () => stretchSeg(1) }, "\uFF0B"),
-                    React.createElement("button", { style: chip, onClick: () => stretchSeg(-1) }, "\u2212"))) : (React.createElement("span", { style: { fontSize: 11.5, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "raccord\u00E9 aux deux bouts \u2014 in\u00E9tirable"))),
-            seg.casse && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "RATTRAPAGES :"),
-                !seg.casse.axis1 && React.createElement("button", { style: chip, onClick: cycleCasseCorner }, "\u27F3 Sens du triangle"),
+            seg.casse && segMore && (React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+                React.createElement("div", { style: rowS },
+                React.createElement("span", { style: labS }, "Casse"),
+                !seg.casse.axis1 && React.createElement("button", { style: chip, onClick: cycleCasseCorner }, "\u27F3 Sens"),
                 (() => {
                     const A = nodes[seg.a], B = nodes[seg.b];
                     if (!A || !B || !seg.casse.corner)
@@ -10269,9 +10449,11 @@ function IsoChantier() {
                                 setSegments((ss) => ss.map((x) => (x.id === seg.id ? { ...x, casse: { ...x.casse, axis1: null, sign1: null, axis2: null, sign2: null } } : x)));
                             } }, "Repasser en auto"))));
                 })(),
+                ),
+                React.createElement("div", { style: rowS },
                 React.createElement("button", { style: chip, onClick: () => updateSeg({ hflip: !seg.hflip }) }, "Hachures"),
-                React.createElement("button", { style: chip, onClick: () => updateSeg({ casse: null, coteL1: null, coteL2: null, hflip: false }) }, "Retirer"),
-                React.createElement("button", { style: { ...chip, borderColor: "#B3341C", color: "#B3341C" }, onClick: () => updateSeg({ casse: null, coteL1: null, coteL2: null }) }, "Retirer la casse"),
+                React.createElement("button", { style: { ...chip, borderColor: "#B3341C", color: "#B3341C" }, onClick: () => updateSeg({ casse: null, coteL1: null, coteL2: null, hflip: false }) }, "Retirer la casse")),
+                React.createElement("div", { style: rowS },
                 React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "B1", width: 92, focusKey: "casse-l1", value: seg.coteL1 || "", onInput: (e) => updateSeg({ coteL1: e.target.value ? +e.target.value : null }), hidden: !!seg.coteL1Hidden, onToggleHidden: seg.coteL1 != null ? () => updateSeg({ coteL1Hidden: !seg.coteL1Hidden }) : null }),
                 seg.coteL1 != null && (React.createElement(React.Fragment, null,
                     React.createElement("button", { style: chip, onClick: () => updateSeg({ coteL1Flip: !seg.coteL1Flip }) }, "\u21C4"),
@@ -10280,6 +10462,7 @@ function IsoChantier() {
                 seg.coteL2 != null && (React.createElement(React.Fragment, null,
                     React.createElement("button", { style: chip, onClick: () => updateSeg({ coteL2Flip: !seg.coteL2Flip }) }, "\u21C4"),
                     React.createElement("button", { style: chip, onClick: () => updateSeg({ coteL2Alt: !seg.coteL2Alt }) }, "\u2195"))),
+                ),
                 seg.coteL1 && seg.coteL2 ? (React.createElement("span", { style: {
                         fontSize: 12, color: COLORS.ink, fontWeight: 700,
                         fontFamily: "'IBM Plex Mono', monospace", width: "100%",
@@ -10294,17 +10477,21 @@ function IsoChantier() {
                     "\u00B0 / ",
                     ((Math.atan2(seg.coteL1, seg.coteL2) * 180) / Math.PI).toFixed(1).replace(".", ","),
                     "\u00B0")) : null)),
-            seg.doubleCasse && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: COLORS.cote } }, "DOUBLE CASSE :"),
-                React.createElement("button", { style: selTri === 1 ? chipOn : chip, onClick: () => setSelTri(1) }, "Triangle 1"),
-                React.createElement("button", { style: selTri === 2 ? chipOn : chip, onClick: () => setSelTri(2) }, "Triangle 2"),
+            seg.doubleCasse && segMore && (React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+                React.createElement("div", { style: rowS },
+                React.createElement("span", { style: labS }, "2 casses"),
+                React.createElement("button", { style: selTri === 1 ? chipOn : chip, onClick: () => setSelTri(1) }, "Tri. 1"),
+                React.createElement("button", { style: selTri === 2 ? chipOn : chip, onClick: () => setSelTri(2) }, "Tri. 2"),
+                React.createElement("button", { style: { ...chip, borderColor: "#B3341C", color: "#B3341C" }, onClick: () => updateSeg({ doubleCasse: null }) }, "Retirer")),
                 (() => {
                     const triKey = selTri === 2 ? "tri2" : "tri1";
                     const triData = seg.doubleCasse[triKey] || {};
                     const updateTri = (patch) => updateSeg({ doubleCasse: { ...seg.doubleCasse, [triKey]: { ...triData, ...patch } } });
                     return (React.createElement(React.Fragment, null,
+                        React.createElement("div", { style: rowS },
                         React.createElement("button", { style: chip, onClick: () => updateTri({ hflip: !triData.hflip }) }, "Hachures"),
-                        React.createElement("button", { style: triData.noTri ? chip : chipOn, onClick: () => updateTri({ noTri: !triData.noTri }) }, triData.noTri ? "+ Triangle" : "Retirer"),
+                        React.createElement("button", { style: triData.noTri ? chip : chipOn, onClick: () => updateTri({ noTri: !triData.noTri }) }, triData.noTri ? "+ Triangle" : "Masquer tri.")),
+                        React.createElement("div", { style: rowS },
                         React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "B1", width: 92, focusKey: "dc-l1", value: triData.coteL1 || "", onInput: (e) => updateTri({ coteL1: e.target.value ? +e.target.value : null }), hidden: !!triData.l1Hidden, onToggleHidden: triData.coteL1 != null ? () => updateTri({ l1Hidden: !triData.l1Hidden }) : null }),
                         triData.coteL1 != null && (React.createElement(React.Fragment, null,
                             React.createElement("button", { style: chip, onClick: () => updateTri({ l1Flip: !triData.l1Flip }) }, "\u21C4"),
@@ -10313,6 +10500,7 @@ function IsoChantier() {
                         triData.coteL2 != null && (React.createElement(React.Fragment, null,
                             React.createElement("button", { style: chip, onClick: () => updateTri({ l2Flip: !triData.l2Flip }) }, "\u21C4"),
                             React.createElement("button", { style: chip, onClick: () => updateTri({ l2Alt: !triData.l2Alt }) }, "\u2195"))),
+                        ),
                         triData.coteL1 && triData.coteL2 ? (React.createElement("span", { style: {
                                 fontSize: 12, color: COLORS.ink, fontWeight: 700,
                                 fontFamily: "'IBM Plex Mono', monospace", width: "100%",
@@ -10365,9 +10553,8 @@ function IsoChantier() {
                             "\u00B0 / ",
                             or2[1].toFixed(1).replace(".", ","),
                             "\u00B0"))));
-                })(),
-                React.createElement("button", { style: { ...chip, borderColor: "#B3341C", color: "#B3341C" }, onClick: () => updateSeg({ doubleCasse: null }) }, "Retirer le double casse"))),
-            fittings.filter((f) => f.segId === seg.id).length > 0 && (React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, fittings.filter((f) => f.segId === seg.id).map((f) => (React.createElement("span", { key: f.id, style: {
+                })())),
+            segMore && fittings.filter((f) => f.segId === seg.id).length > 0 && (React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, fittings.filter((f) => f.segId === seg.id).map((f) => (React.createElement("span", { key: f.id, style: {
                     display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12,
                     background: COLORS.paper, borderRadius: 8, padding: "6px 8px",
                     fontFamily: "'IBM Plex Mono', monospace",
@@ -10416,6 +10603,8 @@ function IsoChantier() {
                     mb("cote", "Coter", () => { setMode("cote"); setSelSeg(null); setCurrent(null); setSelFit(null); setSelElbow(null); setSelSegCote(null); })));
         })(),
         settingsMenu,
+        appDimPopup,
+        nozPopup,
         toolsMenu,
         catPopup,
         showPlans && (React.createElement("div", { onClick: () => setShowPlans(false), style: {
