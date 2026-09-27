@@ -115,7 +115,7 @@ const FITTING_LABELS = {
 };
 const STRUCTURE_TYPES = ["mur", "sol", "tremie"];
 const NO_BOM_TYPES = new Set([...STRUCTURE_TYPES, "texte", "suite", "forme", "pente"]);
-const NO_SNAP_TYPES = new Set([...STRUCTURE_TYPES, "texte", "forme", "pente"]);
+const NO_SNAP_TYPES = new Set([...STRUCTURE_TYPES, "texte", "forme", "pente", "circulateur", "echangeur", "bache"]);
 // organes "en ligne" : n'ont de sens que posés SUR un tube, donc accroche
 // obligatoire aux axes iso (pas de placement libre dans le vide)
 // organes et brides orientables suivant les axes iso perpendiculaires au tube
@@ -436,6 +436,239 @@ const arrowPathPts = (f) => {
     const ath = f.ath || 3;
     const g = ath === 1 ? { sh: 0, hw: 3.5, hl: 8 } : ath === 2 ? { sh: 0.5, hw: 6, hl: 11 } : { sh: 1, hw: 9, hl: 13 };
     return [[-flen, -g.sh], [3, -g.sh], [3, -g.hw], [3 + g.hl, 0], [3, g.hw], [3, g.sh], [-flen, g.sh]];
+};
+// ---- Génie civil (voile / dalle / trémie) dessiné en vraie iso ----
+// Géométrie locale (px avant échelle, origine = point de pose) :
+//  - voile : bloc vertical (longueur × hauteur × épaisseur) dans le plan X
+//    (voile qui court selon X) ou Y ; face principale hachurée
+//  - sol : dalle horizontale avec épaisseur, dessus hachuré
+//  - trémie : réservation rectangulaire (contour pointillé + croix) posée
+//    à plat (H) ou dans un voile (X / Y)
+const gcPlane = (f) => f.pl || (f.type === "mur" ? "X" : "H");
+const gcIso = (x, y, z) => ({ x: (x - y) * COS30 * UNIT, y: (x + y) * 0.5 * UNIT - z * UNIT });
+const gcHatch = (pts, step) => {
+    // hachures à 45° (écran) à l'intérieur d'un polygone convexe
+    const n = { x: Math.SQRT1_2, y: Math.SQRT1_2 };
+    const pr = (p) => p.x * n.x + p.y * n.y;
+    const vals = pts.map(pr);
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    const out = [];
+    for (let o = lo + step * 0.6; o < hi - step * 0.3; o += step) {
+        const hits = [];
+        for (let i = 0; i < pts.length; i++) {
+            const A = pts[i], B = pts[(i + 1) % pts.length];
+            const a = pr(A) - o, b = pr(B) - o;
+            if ((a <= 0 && b > 0) || (a > 0 && b <= 0)) {
+                const t = a / (a - b);
+                hits.push({ x: A.x + (B.x - A.x) * t, y: A.y + (B.y - A.y) * t });
+            }
+        }
+        if (hits.length >= 2)
+            out.push([hits[0], hits[1]]);
+    }
+    return out;
+};
+const pointInPoly = (pt, poly) => {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const a = poly[i], b = poly[j];
+        if ((a.y > pt.y) !== (b.y > pt.y) && pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y) + a.x)
+            inside = !inside;
+    }
+    return inside;
+};
+const gcShape = (f) => {
+    const pl = gcPlane(f);
+    const P = (a) => a.map(([x, y, z]) => gcIso(x, y, z));
+    if (f.type === "tremie") {
+        const a = 0.75;
+        const q = pl === "X" ? [[-a, 0, a], [a, 0, a], [a, 0, -a], [-a, 0, -a]]
+            : pl === "Y" ? [[0, -a, a], [0, a, a], [0, a, -a], [0, -a, -a]]
+                : [[-a, -a, 0], [a, -a, 0], [a, a, 0], [-a, a, 0]];
+        const pts = P(q);
+        return {
+            faces: [{ pts, main: true, dashed: true }],
+            hatch: [],
+            diags: [[pts[0], pts[2]], [pts[1], pts[3]]],
+            line: null,
+            hull: pts,
+        };
+    }
+    let hx, hy, hz;
+    if (f.type === "sol") {
+        hx = 1.8;
+        hy = 1.8;
+        hz = 0.18;
+    }
+    else {
+        const L = 1.7, T = 0.2;
+        hx = pl === "Y" ? T : L;
+        hy = pl === "Y" ? L : T;
+        hz = 1.5;
+    }
+    const top = P([[hx, -hy, hz], [hx, hy, hz], [-hx, hy, hz], [-hx, -hy, hz]]);
+    const fX = P([[hx, -hy, hz], [hx, hy, hz], [hx, hy, -hz], [hx, -hy, -hz]]);
+    const fY = P([[-hx, hy, hz], [hx, hy, hz], [hx, hy, -hz], [-hx, hy, -hz]]);
+    const mainKey = f.type === "sol" ? "top" : pl === "Y" ? "x" : "y";
+    const faces = [
+        { pts: top, main: mainKey === "top" },
+        { pts: fX, main: mainKey === "x" },
+        { pts: fY, main: mainKey === "y" },
+    ];
+    const mainPts = faces.find((fc) => fc.main).pts;
+    const hull = P([[hx, -hy, hz], [-hx, -hy, hz], [-hx, hy, hz], [-hx, hy, -hz], [hx, hy, -hz], [hx, -hy, -hz]]);
+    // ligne de croisement (coupure des tubes qui traversent)
+    const line = f.type === "sol"
+        ? [gcIso(hx, -hy, hz), gcIso(-hx, hy, hz)]
+        : pl === "Y" ? [gcIso(hx, 0, hz), gcIso(hx, 0, -hz)] : [gcIso(0, hy, hz), gcIso(0, hy, -hz)];
+    return { faces, hatch: gcHatch(mainPts, 7.5), diags: [], line, hull };
+};
+// trait de bride en vraie iso : les deux grands côtés suivent l'aile (axe
+// iso ⊥ au tube), l'ÉPAISSEUR est prise suivant l'axe du tube (repère local :
+// x = direction du tube) — et non perpendiculairement au trait comme le ferait
+// une simple épaisseur de trait
+const flangeBar = (cx, w, h) => [
+    { x: cx - w.x - h, y: -w.y }, { x: cx - w.x + h, y: -w.y },
+    { x: cx + w.x + h, y: w.y }, { x: cx + w.x - h, y: w.y },
+];
+const ptsD = (pts) => "M " + pts.map((q) => q.x.toFixed(2) + "," + q.y.toFixed(2)).join(" L ") + " Z";
+// même principe en coordonnées écran : trait p0→p1, épaisseur suivant d (unitaire)
+const flangeBarScreen = (p0, p1, d, h) => [
+    { x: p0.x - d.x * h, y: p0.y - d.y * h }, { x: p0.x + d.x * h, y: p0.y + d.y * h },
+    { x: p1.x + d.x * h, y: p1.y + d.y * h }, { x: p1.x - d.x * h, y: p1.y - d.y * h },
+];
+// ---- Appareils (bâche / échangeur / circulateur) dessinés en volume iso ----
+// Corps cylindrique centré sur un point de grille (p3), couché suivant X/Y ou
+// debout suivant Z, rayon (gR) et longueur (gL) en unités de grille réglables
+// indépendamment. Piquages (noz) : sortie à bride ou soudée, dirigée suivant
+// un axe iso ; l'extrémité de chaque piquage est un VRAI nœud du tracé (sur la
+// grille), sur lequel on démarre ou termine une ligne comme sur n'importe quel
+// bout de tube.
+const APP_DEF = { bache: { r: 1.25, L: 5 }, echangeur: { r: 1, L: 5 }, circulateur: { r: 0.75, L: 2 } };
+const APP_COL = { stroke: "#7D8893", fill: "#E5E8EB", axis: "#A1AAB4", detail: "#8F99A4", flange: "#66717C" };
+const AXV3 = { X: { x: 1, y: 0, z: 0 }, Y: { x: 0, y: 1, z: 0 }, Z: { x: 0, y: 0, z: 1 } };
+const NOZ_DIRS = ["+X", "-X", "+Y", "-Y", "+Z", "-Z"];
+const dirVec3 = (d) => { const v = AXV3[d[1]] || AXV3.Z; const k = d[0] === "-" ? -1 : 1; return { x: v.x * k, y: v.y * k, z: v.z * k }; };
+const add3 = (a, b, k) => ({ x: a.x + b.x * k, y: a.y + b.y * k, z: a.z + b.z * k });
+const isApp3 = (f) => !!(f && APPAREIL_TYPES.has(f.type) && f.p3);
+const appAxis = (f) => (AXV3[f.axis3d] ? f.axis3d : "X");
+const appR = (f) => (f.gR != null ? f.gR : (APP_DEF[f.type] || APP_DEF.bache).r);
+const appL = (f) => (f.gL != null ? f.gL : (APP_DEF[f.type] || APP_DEF.bache).L);
+const nozIsAxial = (f, n) => n.dir[1] === appAxis(f);
+const nozExtMin = (f, n) => (nozIsAxial(f, n) ? Math.ceil(appL(f) / 2 + 0.7) : Math.ceil(appR(f) + 0.7));
+const appAtMax = (f) => Math.max(0, Math.ceil(appL(f) / 2 - 0.25) - 1);
+// piquage ramené dans les limites valides (position sur la virole, longueur
+// mini hors corps) — valeurs entières : l'extrémité tombe toujours sur la grille
+const nozFix = (f, n) => {
+    const m = appAtMax(f);
+    const at = nozIsAxial(f, n) ? 0 : Math.max(-m, Math.min(m, Math.round(n.at || 0)));
+    const ext = Math.max(nozExtMin(f, n), Math.round(n.ext || 0));
+    return { ...n, at, ext };
+};
+const appNormalize = (f) => ({ ...f, noz: (f.noz || []).map((n) => nozFix(f, n)) });
+const nozBase3 = (f, n) => {
+    const A = AXV3[appAxis(f)], D = dirVec3(n.dir);
+    return nozIsAxial(f, n) ? add3(f.p3, D, appL(f) / 2) : add3(add3(f.p3, A, n.at || 0), D, appR(f));
+};
+const nozEnd3 = (f, n) => {
+    const q = nozFix(f, n);
+    const A = AXV3[appAxis(f)], D = dirVec3(q.dir);
+    return nozIsAxial(f, q) ? add3(f.p3, D, q.ext) : add3(add3(f.p3, A, q.at), D, q.ext);
+};
+const hull2D = (pts) => {
+    const P = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
+    if (P.length < 3)
+        return P;
+    const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+    const lo = [], up = [];
+    for (const p of P) {
+        while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0)
+            lo.pop();
+        lo.push(p);
+    }
+    for (let i = P.length - 1; i >= 0; i--) {
+        const p = P[i];
+        while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0)
+            up.pop();
+        up.push(p);
+    }
+    return lo.slice(0, -1).concat(up.slice(0, -1));
+};
+// échelle croquis → réel (unités monde 3D, 1 = 100 mm, par unité de grille) :
+// rapport médian cote / longueur de croquis des tubes droits cotés
+const appWorldScale = (segments, nodes) => {
+    const rs = [];
+    (segments || []).forEach((s) => {
+        if (s.cote == null || s.casse || s.doubleCasse)
+            return;
+        const A = nodes[s.a], B = nodes[s.b];
+        if (!A || !B)
+            return;
+        const g = Math.hypot(B.x - A.x, B.y - A.y, B.z - A.z);
+        if (g > 0)
+            rs.push(s.cote / 100 / g);
+    });
+    rs.sort((a, b) => a - b);
+    return rs.length ? rs[Math.floor(rs.length / 2)] : 1;
+};
+// axe du trait de collerette par défaut : vertical pour une sortie à plat,
+// suivant l'axe de l'appareil (ou X) pour une sortie verticale
+const nozFlangeAxis = (f, n) => (n.dir[1] === "Z" ? (appAxis(f) === "Z" ? "X" : appAxis(f)) : "Z");
+// géométrie écran d'un appareil — P projette un point 3D (grille) à l'écran
+const appPrims = (f, P) => {
+    const ax = appAxis(f), A = AXV3[ax], r = appR(f), h = appL(f) / 2, c = f.p3;
+    const [U, V] = ax === "Z" ? [AXV3.X, AXV3.Y] : ax === "X" ? [AXV3.Y, AXV3.Z] : [AXV3.X, AXV3.Z];
+    const ring = (cc) => {
+        const out = [];
+        for (let i = 0; i < 48; i++) {
+            const t = (i / 48) * Math.PI * 2;
+            out.push(P(add3(add3(cc, U, r * Math.cos(t)), V, r * Math.sin(t))));
+        }
+        return out;
+    };
+    const c1 = add3(c, A, -h), c2 = add3(c, A, h);
+    const hull = hull2D([...ring(c1), ...ring(c2)]);
+    const cap = ring(c2); // fond côté observateur (+axe), vu en entier
+    const sc = P(c), s1 = P(c1), s2 = P(c2);
+    const axisLine = [P(add3(c, A, -h - 0.6)), P(add3(c, A, h + 0.6))];
+    // direction transverse des détails internes : verticale pour un corps
+    // couché, suivant X pour un corps debout
+    const pickW = ax === "Z" ? AXV3.X : AXV3.Z;
+    let zig = null, pump = null;
+    if (f.type === "echangeur") {
+        zig = [];
+        const nZ = 8;
+        for (let i = 0; i <= nZ; i++) {
+            const t = -0.72 * h + (1.44 * h * i) / nZ;
+            const w = i === 0 || i === nZ ? 0 : (i % 2 ? 0.55 : -0.55) * r;
+            zig.push(P(add3(add3(c, A, t), pickW, w)));
+        }
+    }
+    if (f.type === "circulateur") {
+        const k = f.flip ? -1 : 1;
+        const tip = P(add3(c, A, 0.55 * h * k)), b1 = P(add3(add3(c, A, -0.35 * h * k), pickW, 0.5 * r)), b2 = P(add3(add3(c, A, -0.35 * h * k), pickW, -0.5 * r));
+        pump = [tip, b1, b2];
+    }
+    const view = { x: 1, y: 1, z: 1 };
+    const noz = (f.noz || []).map((n0) => {
+        const n = nozFix(f, n0);
+        const D = dirVec3(n.dir);
+        const a3 = nozBase3(f, n), b3 = nozEnd3(f, n);
+        // collerette de bride : trait perpendiculaire suivant un axe iso ⊥ au piquage
+        const Wf = n.fAx && n.fAx !== n.dir[1] && AXV3[n.fAx] ? AXV3[n.fAx] : AXV3[nozFlangeAxis(f, n)];
+        const fr = Math.max(0.3, Math.min(0.55, r * 0.45));
+        // bride : collerette en retrait du nœud d'un jeu de bride (7 px à
+        // zoom 1, comme l'écart des deux traits d'une bride double) — la bride
+        // simple posée au départ du tube raccordé laisse ainsi le jeu du joint
+        const fc = n.kind === "bride" ? add3(b3, D, -7 / UNIT) : b3;
+        return {
+            id: n.id, kind: n.kind, node: n.node,
+            a: P(a3), b: P(b3), s: P(fc), sd: (() => { const q0 = P(a3), q1 = P(b3), L = Math.hypot(q1.x - q0.x, q1.y - q0.y) || 1; return { x: (q1.x - q0.x) / L, y: (q1.y - q0.y) / L }; })(),
+            flange: n.kind === "bride" ? [P(add3(fc, Wf, -fr)), P(add3(fc, Wf, fr))] : null,
+            back: D.x * view.x + D.y * view.y + D.z * view.z < 0,
+        };
+    });
+    return { hull, cap, axisLine, zig, pump, noz, center: sc };
 };
 // Outil "Apport chaleur" (soudage) — Q = K·(U×I)/(1000×va), va = distance/temps.
 // Composant au niveau module : reste monté (open=false → rien affiché) pour
@@ -1055,6 +1288,29 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
             virtualSegs.push(vs);
             (adj[vs.a] = adj[vs.a] || []).push(vs);
             (adj[vs.b] = adj[vs.b] || []).push(vs);
+        });
+        // piquages d'un même appareil : reliés entre eux par des connecteurs
+        // virtuels (un par axe) pour que l'appareil et toutes les lignes qui y
+        // sont raccordées forment un seul ensemble cohérent en 3D
+        const kApp = appWorldScale(segments, nodes);
+        (fittings || []).filter(isApp3).forEach((f) => {
+            const nz = (f.noz || []).filter((n) => n.node && nodes[n.node]);
+            if (nz.length < 2)
+                return;
+            const e0 = nozEnd3(f, nz[0]);
+            nz.slice(1).forEach((n, i) => {
+                const e = nozEnd3(f, n);
+                const legs = [["x", e.x - e0.x], ["y", e.y - e0.y], ["z", e.z - e0.z]].filter(([, v]) => v !== 0);
+                let from = nz[0].node;
+                legs.forEach(([axn, v], j) => {
+                    const to = j === legs.length - 1 ? n.node : "__app_" + f.id + "_" + i + "_" + j;
+                    const vs = { id: "__appv_" + f.id + "_" + i + "_" + j, a: from, b: to, __virtual: true, __axis: axn, __sign: v > 0 ? 1 : -1, __len: Math.abs(v) * kApp * 100 };
+                    virtualSegs.push(vs);
+                    (adj[vs.a] = adj[vs.a] || []).push(vs);
+                    (adj[vs.b] = adj[vs.b] || []).push(vs);
+                    from = to;
+                });
+            });
         });
         // 1ère passe : résoudre chaque réseau connecté (tronçons réels ET
         // connecteurs virtuels issus des cotes libres) indépendamment, chacun à
@@ -3366,6 +3622,60 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
         const p = screenPt(pos);
         return { id: f.id, type: f.type, color: col, p, prims: projPrims, pos };
     }).filter(Boolean);
+    // appareils en volume (bâche / échangeur / circulateur) : le corps est
+    // accroché au nœud réel d'un de ses piquages (de préférence raccordé), le
+    // reste de la géométrie reprend les proportions du croquis, mises à l'échelle
+    // des cotes (rapport médian cote / longueur croquis des tubes)
+    const buildAppMarkers = () => {
+        const apps = (fittings || []).filter(isApp3);
+        if (!apps.length)
+            return [];
+        const k = appWorldScale(segments, nodes);
+        return apps.map((f) => {
+            const noz = (f.noz || []).filter((n) => n.node && resolved.posMap[n.node]);
+            if (!noz.length)
+                return null;
+            const anchorN = noz.find((n) => segments.some((s) => s.a === n.node || s.b === n.node)) || noz[0];
+            const anchorW = resolved.posMap[anchorN.node];
+            const e3 = nozEnd3(f, anchorN);
+            const toW = (q) => ({ x: anchorW.x + (q.x - e3.x) * k, y: anchorW.y + (q.y - e3.y) * k, z: anchorW.z + (q.z - e3.z) * k });
+            const col = f.color || "#9AA5B1";
+            const A = AXV3[appAxis(f)], negA = { x: -A.x, y: -A.y, z: -A.z };
+            const r = appR(f) * k, h = (appL(f) / 2) * k;
+            const ctr = toW(f.p3);
+            const prims = [...discSolid(ctr, A, r, h, col, 24, true)];
+            if (f.type !== "circulateur") {
+                // fonds bombés
+                const prof = [];
+                for (let i = 0; i <= 6; i++) {
+                    const a = (i / 6) * (Math.PI / 2);
+                    prof.push({ z: 0.35 * r * Math.sin(a), r: r * Math.cos(a) });
+                }
+                prims.push(...revolveProfile(add3(ctr, A, h), A, prof, col, 24), ...revolveProfile(add3(ctr, A, -h), negA, prof, col, 24));
+            }
+            (f.noz || []).forEach((n0) => {
+                const n = nozFix(f, n0);
+                const D = dirVec3(n.dir);
+                const a = toW(nozBase3(f, n)), b = toW(nozEnd3(f, n));
+                const half = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) / 2;
+                const rn = Math.max(0.06, Math.min(r * 0.3, 0.35));
+                prims.push(...discSolid({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 }, D, rn, half, col, 12, true));
+                if (n.kind === "bride")
+                    prims.push(...discSolid(add3(b, D, -0.05), D, rn * 1.9, 0.05, col, 16, true));
+            });
+            const projPrims = prims.map((pr) => {
+                if (pr.kind === "poly") {
+                    const pts = pr.pts.map(screenPt);
+                    return { kind: "poly", pts, fill: pr.fill, depth: pts.reduce((acc, q) => acc + q.depth, 0) / pts.length };
+                }
+                if (pr.kind === "line")
+                    return { kind: "line", a: screenPt(pr.a), b: screenPt(pr.b) };
+                return { kind: "dot", p: screenPt(pr.p), r: pr.r || 2 };
+            });
+            projPrims.sort((a2, b2) => (b2.depth || 0) - (a2.depth || 0));
+            return { id: f.id, type: f.type, color: col, p: screenPt(ctr), prims: projPrims, pos: ctr };
+        }).filter(Boolean);
+    };
     if (window.__V3D_PERF_LOG) {
         console.log('[perf] pre-JSX (consts: pipeShapes/lines/wallShapes/grid/handles/markers-def) = ' + (performance.now() - __v3dRenderT0).toFixed(1) + 'ms');
     }
@@ -3400,6 +3710,7 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
                 // profondeur quasi égale et traverser visuellement la bride/
                 // vanne — un accessoire plein doit toujours le recouvrir
                 buildMarkers().forEach((m) => items.push({ kind: "marker", depth: m.p.depth - 0.15, rank: pipeCover(m.pos), m }));
+                buildAppMarkers().forEach((m) => m.prims.forEach((pr, i) => items.push({ kind: "marker", depth: pr.depth != null ? pr.depth : m.p.depth, rank: pipeCover(m.pos), m: { ...m, id: m.id + "_" + i, prims: [pr], noLabel: i < m.prims.length - 1 } })));
                 const __tAfterCore = performance.now();
                 // fil de fer stable : les 12 arêtes réelles du pavé, découpées et
                 // classées par le même rang géométrique — contrairement au contour
@@ -3537,7 +3848,7 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
                                     return React.createElement("circle", { key: j, cx: pr.p.x, cy: pr.p.y, r: pr.r, fill: m.color });
                                 return React.createElement("circle", { key: j, cx: pr.p.x, cy: pr.p.y, r: pr.r, fill: COLORS.paper, stroke: m.color, "stroke-width": 1.8 });
                             }),
-                            showLabels && (React.createElement(React.Fragment, null,
+                            showLabels && !m.noLabel && (React.createElement(React.Fragment, null,
                                 React.createElement("text", { x: m.p.x + 13, y: m.p.y + 3.5, "font-size": labelFontSize, "font-weight": 700, "font-family": "'Archivo', sans-serif", fill: COLORS.paper, stroke: COLORS.paper, "stroke-width": 3 }, label),
                                 React.createElement("text", { x: m.p.x + 13, y: m.p.y + 3.5, "font-size": labelFontSize, "font-weight": 700, "font-family": "'Archivo', sans-serif", fill: COLORS.ink }, label)))));
                     }
@@ -3867,6 +4178,7 @@ function IsoChantier() {
     const [selElbow, setSelElbow] = useState(null);
     const [selTri, setSelTri] = useState(null); // 1 ou 2 : quel triangle d'un double casse est actif
     const [selFit, setSelFit] = useState(null);
+    const [selNoz, setSelNoz] = useState(null); // piquage sélectionné (appareil)
     const [selDim, setSelDim] = useState(null);
     const [selSegCote, setSelSegCote] = useState(null);
     const [zoom, setZoom] = useState(1);
@@ -4274,9 +4586,61 @@ function IsoChantier() {
         setShowPlans(false);
     };
     // ---- positions ----
+    // ---- appareils en volume : reprise des anciens plans + nœuds des piquages ----
+    // ancien appareil (posé sur un tube ou en libre à plat) → centre 3D sur la grille
+    useEffect(() => {
+        if (!fittings.some((f) => APPAREIL_TYPES.has(f.type) && !f.p3))
+            return;
+        setFittings((ff) => ff.map((f) => {
+            if (!APPAREIL_TYPES.has(f.type) || f.p3)
+                return f;
+            let p3 = { x: 0, y: 0, z: 0 };
+            const sg = f.segId ? segments.find((x) => x.id === f.segId) : null;
+            if (sg && nodes[sg.a] && nodes[sg.b]) {
+                const A = nodes[sg.a], B = nodes[sg.b], t = f.t != null ? f.t : 0.5;
+                p3 = { x: Math.round(A.x + (B.x - A.x) * t), y: Math.round(A.y + (B.y - A.y) * t), z: Math.round(A.z + (B.z - A.z) * t) };
+            }
+            else if (f.wx !== undefined) {
+                const a = f.wx / (COS30 * UNIT), b = (f.wy || 0) / (0.5 * UNIT);
+                p3 = { x: Math.round((a + b) / 2), y: Math.round((b - a) / 2), z: 0 };
+            }
+            return { ...f, p3, segId: undefined, t: undefined, wx: undefined, wy: undefined, axis3d: f.axis3d || "X", noz: f.noz || [] };
+        }));
+        // eslint-disable-next-line
+    }, [fittings]);
+    // l'extrémité de chaque piquage est un nœud du tracé : il suit toujours
+    // l'appareil (déplacement, orientation, Ø, longueur, réglage du piquage)
+    useEffect(() => {
+        const want = {};
+        for (const f of fittings) {
+            if (!isApp3(f))
+                continue;
+            for (const n of f.noz || [])
+                if (n.node)
+                    want[n.node] = nozEnd3(f, n);
+        }
+        const ks = Object.keys(want);
+        if (!ks.length)
+            return;
+        if (ks.some((k) => !nodes[k] || nodes[k].x !== want[k].x || nodes[k].y !== want[k].y || nodes[k].z !== want[k].z))
+            setNodes((n) => ({ ...n, ...want }));
+    }, [fittings, nodes]);
+    const nozzleNodes = useMemo(() => {
+        const set = new Set();
+        for (const f of fittings)
+            if (isApp3(f))
+                for (const n of f.noz || [])
+                    if (n.node)
+                        set.add(n.node);
+        return set;
+    }, [fittings]);
     const fittingScreen = (f) => {
         if (!f)
             return null;
+        if (isApp3(f)) {
+            const q = proj(f.p3);
+            return { x: q.x, y: q.y, angle: 0 };
+        }
         if (f.segId) {
             const s = segments.find((x) => x.id === f.segId);
             if (!s)
@@ -4299,23 +4663,17 @@ function IsoChantier() {
     // shapeHandlePos (position + rotation + échelle du fitting)
     const structLineScreen = (f) => {
         const p = fittingScreen(f);
-        if (!p)
+        if (!p || (f.type !== "mur" && f.type !== "sol"))
             return null;
-        const local = f.type === "mur" ? [{ x: 0, y: -48 }, { x: 0, y: 48 }]
-            : f.type === "sol" ? [{ x: -58, y: 0 }, { x: 58, y: 0 }] : null;
-        if (!local)
-            return null;
-        const rad = ((f.rot || 0) * Math.PI) / 180;
+        const line = gcShape(f).line;
         const scl = (f.scl || 1) * zoom;
-        const cos = Math.cos(rad), sin = Math.sin(rad);
-        return local.map(({ x, y }) => ({
-            x: p.x + (x * cos - y * sin) * scl,
-            y: p.y + (x * sin + y * cos) * scl,
-        }));
+        return line.map((q) => ({ x: p.x + q.x * scl, y: p.y + q.y * scl }));
     };
     // position écran de la poignée de redimensionnement (coin bas-droit)
     // d'une forme, en tenant compte de sa rotation et de sa taille actuelle
     const shapeHandlePos = (f) => {
+        if (isApp3(f))
+            return null;
         const p = fittingScreen(f);
         if (!p)
             return null;
@@ -4375,29 +4733,30 @@ function IsoChantier() {
             if (!p)
                 continue;
             let d, r;
-            if (STRUCTURE_TYPES.includes(f.type)) {
+            if (isApp3(f)) {
+                // corps (intérieur compris) + piquages
+                const g = appPrims(f, proj);
+                d = pointInPoly(pt, g.hull) ? 6 : 1e9;
+                for (let i = 0; i < g.hull.length; i++)
+                    d = Math.min(d, distToSeg(pt, g.hull[i], g.hull[(i + 1) % g.hull.length], 0, 1).d);
+                for (const n of g.noz)
+                    d = Math.min(d, distToSeg(pt, n.a, n.b, 0, 0.85).d);
+                r = 12;
+            }
+            else if (STRUCTURE_TYPES.includes(f.type)) {
                 // distance à la forme réelle, pas à un grand cercle :
                 // la tuyauterie proche d'un voile reste sélectionnable
                 const scl = (f.scl || 1) * zoom;
-                const a = ((f.rot || 0) * Math.PI) / 180;
-                const RR = (vx, vy) => ({
-                    x: p.x + vx * Math.cos(a) - vy * Math.sin(a),
-                    y: p.y + vx * Math.sin(a) + vy * Math.cos(a),
-                });
-                if (f.type === "mur") {
-                    d = distToSeg(pt, RR(0, -48 * scl), RR(0, 48 * scl), 0, 1).d;
-                    r = 14;
-                }
-                else if (f.type === "sol") {
-                    d = distToSeg(pt, RR(-58 * scl, 0), RR(58 * scl, 0), 0, 1).d;
-                    r = 14;
-                }
-                else {
-                    // trémie : anneau autour du contour, le centre reste libre
-                    const dc = Math.hypot(p.x - pt.x, p.y - pt.y);
-                    d = Math.abs(dc - 28 * scl);
-                    r = 14;
-                }
+                // distance au contour réel (silhouette iso) ; l'intérieur
+                // d'un voile/dalle reste libre pour la tuyauterie qui passe
+                // devant, sauf pour la trémie (petite) sélectionnable partout
+                const hull = gcShape(f).hull.map((q) => ({ x: p.x + q.x * scl, y: p.y + q.y * scl }));
+                d = 1e9;
+                for (let i = 0; i < hull.length; i++)
+                    d = Math.min(d, distToSeg(pt, hull[i], hull[(i + 1) % hull.length], 0, 1).d);
+                if (f.type === "tremie" && pointInPoly(pt, hull))
+                    d = 0;
+                r = 14;
             }
             else if (f.type === "forme") {
                 d = Math.hypot(p.x - pt.x, p.y - pt.y);
@@ -4594,11 +4953,12 @@ function IsoChantier() {
             thr: e && e.pointerType === "mouse" ? 5 : 14,
             origSegId: f ? f.segId : undefined, origT: f ? f.t : undefined,
             origWx: f ? f.wx : undefined, origWy: f ? f.wy : undefined,
+            origP3: f && f.p3 ? { ...f.p3 } : undefined,
         };
     };
     const restoreFitDrag = (dr) => {
         setFittings((ff) => ff.map((x) => x.id === dr.fitId
-            ? { ...x, segId: dr.origSegId, t: dr.origT, wx: dr.origWx, wy: dr.origWy }
+            ? (dr.origP3 ? { ...x, p3: dr.origP3 } : { ...x, segId: dr.origSegId, t: dr.origT, wx: dr.origWx, wy: dr.origWy })
             : x));
     };
     const handleDown = (e) => {
@@ -4649,6 +5009,25 @@ function IsoChantier() {
                 snapshot();
                 dragRef.current = { boxHandle: bestH };
                 return;
+            }
+        }
+        // étiquette DN (hors tracé) : le cadre se glisse librement, le point
+        // d'accroche glisse le long de son tube
+        if (mode !== "draw") {
+            for (const g of dnGroups) {
+                const lp = dnLabelPos(g.anchor);
+                if (Math.hypot(lp.x - pt.x, lp.y - pt.y) < 28) {
+                    snapshot();
+                    dragRef.current = { dnSeg: g.anchor.id };
+                    return;
+                }
+            }
+            for (const g of dnGroups) {
+                const lp = dnLabelPos(g.anchor);
+                if (Math.hypot(lp.mid.x - pt.x, lp.mid.y - pt.y) < 16) {
+                    dragRef.current = { dnAnchor: g.anchor.id, armed: false, sx: pt.x, sy: pt.y };
+                    return;
+                }
             }
         }
         if (mode === "add") {
@@ -4721,19 +5100,11 @@ function IsoChantier() {
                         const f = fittings.find((x) => x.id === fIdd);
                         return f && f.segId === undefined && f.wx !== undefined;
                     });
+                    const appFits = mFits.filter((fIdd) => isApp3(fittings.find((x) => x.id === fIdd)));
                     dragRef.current = {
                         moveSel: true, sx: pt.x, sy: pt.y, ax: 0, ay: 0,
-                        nodeIds: [...nodeSet], freeFits, segIds: [...mSegs],
+                        nodeIds: [...nodeSet], freeFits, appFits, segIds: [...mSegs],
                     };
-                    return;
-                }
-            }
-            // glisser une étiquette DN
-            for (const g of dnGroups) {
-                const lp = dnLabelPos(g.anchor);
-                if (Math.hypot(lp.x - pt.x, lp.y - pt.y) < 28) {
-                    snapshot();
-                    dragRef.current = { dnSeg: g.anchor.id };
                     return;
                 }
             }
@@ -4976,6 +5347,11 @@ function IsoChantier() {
                                 x: s.casse.corner.x + ddx, y: s.casse.corner.y + ddy, z: s.casse.corner.z,
                             } } }
                     : s));
+                if (dr.appFits && dr.appFits.length) {
+                    setFittings((ff) => ff.map((f) => dr.appFits.includes(f.id)
+                        ? { ...f, p3: { x: f.p3.x + ddx, y: f.p3.y + ddy, z: f.p3.z } }
+                        : f));
+                }
                 if (dr.freeFits.length) {
                     const sdx = (ddx - ddy) * COS30 * u / zoom;
                     const sdy = (ddx + ddy) * 0.5 * u / zoom;
@@ -4984,6 +5360,25 @@ function IsoChantier() {
                         : f));
                 }
             }
+            return;
+        }
+        if (dragRef.current && dragRef.current.dnAnchor) {
+            const dr = dragRef.current;
+            if (!dr.armed) {
+                if (Math.hypot(pt.x - dr.sx, pt.y - dr.sy) < 10)
+                    return;
+                dr.armed = true;
+                snapshot();
+            }
+            const sg = segments.find((x) => x.id === dr.dnAnchor);
+            if (sg) {
+                const A = proj(nodes[sg.a]), B = proj(nodes[sg.b]);
+                const L2 = (B.x - A.x) ** 2 + (B.y - A.y) ** 2 || 1;
+                const tt = Math.max(0.03, Math.min(0.97, ((pt.x - A.x) * (B.x - A.x) + (pt.y - A.y) * (B.y - A.y)) / L2));
+                setSegments((ss) => ss.map((x) => (x.id === sg.id ? { ...x, dnt: tt } : x)));
+            }
+            t.lx = pt.x;
+            t.ly = pt.y;
             return;
         }
         if (dragRef.current && dragRef.current.dnSeg) {
@@ -5067,9 +5462,20 @@ function IsoChantier() {
                 dr.armed = true;
                 snapshot();
             }
-            const w = toWorld(pt.x + dr.gx, pt.y + dr.gy);
             const id = dr.fitId;
-            setFittings((ff) => ff.map((f) => f.id === id ? { ...f, segId: undefined, t: undefined, wx: w.wx, wy: w.wy } : f));
+            if (dr.origP3) {
+                // appareil : déplacement sur la grille, à altitude constante
+                const u = UNIT * zoom;
+                const a = (pt.x - dr.sx) / (COS30 * u);
+                const b = (pt.y - dr.sy) / (0.5 * u);
+                const gx = Math.round((a + b) / 2), gy = Math.round((b - a) / 2);
+                const np = { x: dr.origP3.x + gx, y: dr.origP3.y + gy, z: dr.origP3.z };
+                setFittings((ff) => ff.map((f) => f.id === id && (f.p3.x !== np.x || f.p3.y !== np.y) ? { ...f, p3: np } : f));
+            }
+            else {
+                const w = toWorld(pt.x + dr.gx, pt.y + dr.gy);
+                setFittings((ff) => ff.map((f) => f.id === id ? { ...f, segId: undefined, t: undefined, wx: w.wx, wy: w.wy } : f));
+            }
         }
         else if (t.moved) {
             // glisser sur le vide = déplacement de la vue (1 doigt / souris)
@@ -5163,6 +5569,14 @@ function IsoChantier() {
             dragRef.current = null;
             tapRef.current = null;
             return;
+        }
+        if (dragRef.current && dragRef.current.dnAnchor) {
+            const moved = dragRef.current.armed;
+            dragRef.current = null;
+            if (moved) {
+                tapRef.current = null;
+                return;
+            }
         }
         if (dragRef.current && (dragRef.current.textSeg || dragRef.current.textDim || dragRef.current.dnSeg || dragRef.current.nameSeg || dragRef.current.triHandle || dragRef.current.boxHandle)) {
             dragRef.current = null;
@@ -5366,6 +5780,16 @@ function IsoChantier() {
         }
         return { type: "new", point: unproj(screenPt.x, screenPt.y) };
     };
+    // coordonnées (continues) du point écran (sx, sy) dans le plan formé par
+    // les axes p1 et p2 (0=x, 1=y, 2=z) passant par "o"
+    const solvePlane = (o, p1, p2, sx, sy) => {
+        const so = proj(o);
+        const ax = (p) => { const v = [0, 0, 0]; v[p] = 1; const q = proj({ x: o.x + v[0], y: o.y + v[1], z: o.z + v[2] }); return [q.x - so.x, q.y - so.y]; };
+        const e1 = ax(p1), e2 = ax(p2);
+        const dx = sx - so.x, dy = sy - so.y;
+        const det = e1[0] * e2[1] - e1[1] * e2[0] || 1e-9;
+        return [(dx * e2[1] - dy * e2[0]) / det, (e1[0] * dy - e1[1] * dx) / det];
+    };
     const handleDraw = (pt) => {
         if (!current) {
             const snap = snapDraw(pt);
@@ -5414,7 +5838,7 @@ function IsoChantier() {
         // point de départ isolé (aucun tronçon) + tap sur un nœud existant :
         // c'est une reprise de tracé ratée de peu → on déplace le départ
         // sur ce nœud au lieu de créer un tronçon oblique parasite
-        const curIsolated = !segments.some((s) => s.a === current || s.b === current);
+        const curIsolated = !nozzleNodes.has(current) && !segments.some((s) => s.a === current || s.b === current);
         if (directNode && bdDirect < 22 && curIsolated) {
             const orphan = current;
             setNodes((n) => { const c = { ...n }; delete c[orphan]; return c; });
@@ -5445,10 +5869,16 @@ function IsoChantier() {
             // On n'exclut plus les combinaisons à 1 ou 2 composantes : tant que
             // le mode est actif, tout tronçon oblique obtient le traitement
             // double casse (2 triangles), garanti plus loin.
-            const R3 = 12;
-            for (let i = -R3; i <= R3; i++) {
-                for (let j = -R3; j <= R3; j++) {
-                    for (let k = -R3; k <= R3; k++) {
+            // recherche centrée sur la solution exacte (et non plus dans un
+            // rayon fixe autour de cur) : longueur illimitée même dézoomé
+            const sc0 = proj(cur);
+            const uZ = Math.abs(proj({ x: cur.x, y: cur.y, z: cur.z + 1 }).y - sc0.y) || 1;
+            const Rk = Math.min(600, Math.max(12, Math.ceil(Math.hypot(pt.x - sc0.x, pt.y - sc0.y) / uZ) + 3));
+            for (let k = -Rk; k <= Rk; k++) {
+                const [ai, aj] = solvePlane(cur, 0, 1, pt.x, pt.y + k * uZ);
+                const i0 = Math.round(ai), j0 = Math.round(aj);
+                for (let i = i0 - 2; i <= i0 + 2; i++) {
+                    for (let j = j0 - 2; j <= j0 + 2; j++) {
                         if (i === 0 && j === 0 && k === 0)
                             continue;
                         const c = { x: cur.x + i, y: cur.y + j, z: cur.z + k };
@@ -5456,8 +5886,7 @@ function IsoChantier() {
                         // plusieurs points 3D peuvent se projeter au même endroit à
                         // l'écran (ambiguïté de profondeur propre à l'isométrique) ;
                         // un léger bonus au déplacement le plus court départage en
-                        // faveur du point le plus proche/intuitif, sans fausser la
-                        // comparaison entre positions écran réellement différentes
+                        // faveur du point le plus proche/intuitif
                         const dist = Math.hypot(s.x - pt.x, s.y - pt.y) + (Math.abs(i) + Math.abs(j) + Math.abs(k)) * 0.05;
                         if (dist < bd) {
                             bd = dist;
@@ -5468,35 +5897,49 @@ function IsoChantier() {
             }
         }
         else if (casseMode) {
-            const R = 20;
             // plusieurs directions 3D se projettent sur le même trait à l'écran :
             // on pénalise les combinaisons à 2 composantes pour qu'un tracé qui
-            // suit visuellement un axe reste un axe (et ne devienne pas une casse)
-            for (let i = -R; i <= R; i++) {
-                for (let j = -R; j <= R; j++) {
+            // suit visuellement un axe reste un axe (et ne devienne pas une casse).
+            // Recherche autour de la solution exacte dans chaque plan : pas de
+            // limite de longueur, quel que soit le zoom.
+            const planes = [[0, 1], [0, 2], [1, 2]];
+            for (const [p1, p2] of planes) {
+                const [ai, aj] = solvePlane(cur, p1, p2, pt.x, pt.y);
+                const i0 = Math.round(ai), j0 = Math.round(aj);
+                const cand = (i, j) => {
+                    const v = [0, 0, 0];
+                    v[p1] = i;
+                    v[p2] = j;
+                    return { x: cur.x + v[0], y: cur.y + v[1], z: cur.z + v[2] };
+                };
+                const tryIJ = (i, j) => {
                     if (i === 0 && j === 0)
-                        continue;
+                        return;
                     const nComp = (i !== 0 ? 1 : 0) + (j !== 0 ? 1 : 0);
-                    const bias = (nComp - 1) * 0.75;
-                    const cands = [
-                        { x: cur.x + i, y: cur.y + j, z: cur.z },
-                        { x: cur.x + i, y: cur.y, z: cur.z + j },
-                        { x: cur.x, y: cur.y + i, z: cur.z + j },
-                    ];
-                    for (const c of cands) {
-                        const s = proj(c);
-                        const dist = Math.hypot(s.x - pt.x, s.y - pt.y) + bias;
-                        if (dist < bd) {
-                            bd = dist;
-                            best = c;
-                        }
+                    const c = cand(i, j);
+                    const s = proj(c);
+                    const dist = Math.hypot(s.x - pt.x, s.y - pt.y) + (nComp - 1) * 0.75;
+                    if (dist < bd) {
+                        bd = dist;
+                        best = c;
                     }
-                }
+                };
+                for (let i = i0 - 2; i <= i0 + 2; i++)
+                    for (let j = j0 - 2; j <= j0 + 2; j++)
+                        tryIJ(i, j);
             }
         }
         else {
+            // pas le long de chaque direction : projection du tap sur la
+            // direction écran → nombre de pas direct (plus de plafond à 40)
+            const sc0 = proj(cur);
             for (const d of DIRS) {
-                for (let step = 1; step <= 40; step++) {
+                const s1 = proj({ x: cur.x + d[0], y: cur.y + d[1], z: cur.z + d[2] });
+                const vx = s1.x - sc0.x, vy = s1.y - sc0.y;
+                const v2 = vx * vx + vy * vy || 1;
+                const t = ((pt.x - sc0.x) * vx + (pt.y - sc0.y) * vy) / v2;
+                const st0 = Math.max(1, Math.round(t));
+                for (let step = Math.max(1, st0 - 1); step <= st0 + 1; step++) {
                     const cand = { x: cur.x + d[0] * step, y: cur.y + d[1] * step, z: cur.z + d[2] * step };
                     const s = proj(cand);
                     const dist = Math.hypot(s.x - pt.x, s.y - pt.y);
@@ -5611,7 +6054,7 @@ function IsoChantier() {
                 // parties très loin) — le tronçon oblique reste correct, juste
                 // sans ce triangle illustratif
                 const jogLen = Math.max(Math.abs(delta[0]), Math.abs(delta[1]), Math.abs(delta[2]));
-                if (jogLen <= 20) {
+                if (casseMode || jogLen <= 20) {
                     casse = { corner: cornerFor(cur, best), kind: casseMode ? "casse" : "45" };
                 }
             }
@@ -5704,7 +6147,7 @@ function IsoChantier() {
                 return;
             }
         }
-        const hitF = findFittingAt(pt);
+        let hitF = findFittingAt(pt);
         // recherche du tube le plus proche
         let bestS = null, bdS = 1e9;
         for (const s of segments) {
@@ -5715,7 +6158,10 @@ function IsoChantier() {
                 bestS = s.id;
             }
         }
-        const hitS = bestS && bdS < 26 ? bestS : null;
+        let hitS = bestS && bdS < 26 ? bestS : null;
+        // tube qui passe devant le corps d'un appareil : le tube reste prioritaire
+        if (hitF && hitS && bdS < 10 && isApp3(fittings.find((x) => x.id === hitF)))
+            hitF = null;
         if (multi) {
             // mode multisélection : chaque touche ajoute/retire l'élément
             if (hitF) {
@@ -5853,6 +6299,23 @@ function IsoChantier() {
         const id = fid();
         const snap = snapFitting(pt, addType.type);
         const base = { id, type: addType.type, sub: addType.sub || null, rot: 0, scl: 1 };
+        if (APPAREIL_TYPES.has(addType.type)) {
+            // appareil en volume : centre sur un point de grille, à l'altitude
+            // du nœud le plus proche à l'écran (sinon z = 0)
+            let zN = 0, bdN = 150;
+            for (const k of Object.keys(nodes)) {
+                const q = proj(nodes[k]);
+                const dd = Math.hypot(q.x - pt.x, q.y - pt.y);
+                if (dd < bdN) {
+                    bdN = dd;
+                    zN = nodes[k].z;
+                }
+            }
+            const q = unprojAtZ(pt.x, pt.y, zN);
+            setFittings((ff) => [...ff, { ...base, p3: { x: q.x, y: q.y, z: zN }, axis3d: addAxis3d, noz: [] }]);
+            setSelFit(id);
+            return;
+        }
         if (addType.type === "texte") {
             Object.assign(base, { text: "Texte", size: 13, bold: false, italic: false, hl: false });
         }
@@ -6085,11 +6548,14 @@ function IsoChantier() {
     const dnLabelPos = (anchor) => {
         var _a, _b;
         const A = proj(nodes[anchor.a]), B = proj(nodes[anchor.b]);
-        const mid = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+        const c0 = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+        // point d'accroche réglable le long du tube (dnt), cadre inchangé
+        const tt = anchor.dnt != null ? anchor.dnt : 0.5;
+        const mid = { x: A.x + (B.x - A.x) * tt, y: A.y + (B.y - A.y) * tt };
         return {
-            mid,
-            x: mid.x + ((_a = anchor.dnlx) !== null && _a !== void 0 ? _a : 40) * zoom,
-            y: mid.y + ((_b = anchor.dnly) !== null && _b !== void 0 ? _b : -44) * zoom,
+            mid, c0,
+            x: c0.x + ((_a = anchor.dnlx) !== null && _a !== void 0 ? _a : 40) * zoom,
+            y: c0.y + ((_b = anchor.dnly) !== null && _b !== void 0 ? _b : -44) * zoom,
         };
     };
     const trimPoint = (fromKey, towardKey, r) => {
@@ -6291,14 +6757,14 @@ function IsoChantier() {
             const wB = wingVecFor(f, baseAngle || 0, 8);
             body = (React.createElement(React.Fragment, null,
                 React.createElement("path", { d: `M ${-3.5 - wB.x},${-wB.y} L ${-3.5 + wB.x},${wB.y} L ${3.5 + wB.x},${wB.y} L ${3.5 - wB.x},${-wB.y} Z`, fill: COLORS.paper, stroke: "none" }),
-                React.createElement("line", { x1: -3.5 - wB.x, y1: -wB.y, x2: -3.5 + wB.x, y2: wB.y, stroke: (f.color || COLORS.ink), "stroke-width": 2 }),
-                React.createElement("line", { x1: 3.5 - wB.x, y1: -wB.y, x2: 3.5 + wB.x, y2: wB.y, stroke: (f.color || COLORS.ink), "stroke-width": 2 })));
+                React.createElement("path", { d: ptsD(flangeBar(-3.5, wB, 1)), fill: (f.color || COLORS.ink), stroke: "none" }),
+                React.createElement("path", { d: ptsD(flangeBar(3.5, wB, 1)), fill: (f.color || COLORS.ink), stroke: "none" })));
         }
         else if (type === "bridesimple") {
             // Bride simple : un seul trait perpendiculaire (raccordement à un
             // appareil par exemple), même logique d'axe 3D que la bride double
             const wBs = wingVecFor(f, baseAngle || 0, 8);
-            body = (React.createElement("line", { x1: -wBs.x, y1: -wBs.y, x2: wBs.x, y2: wBs.y, stroke: (f.color || COLORS.ink), "stroke-width": 2 }));
+            body = (React.createElement("path", { d: ptsD(flangeBar(0, wBs, 1)), fill: (f.color || COLORS.ink), stroke: "none" }));
         }
         else if (type === "support") {
             // Support de tuyauterie : croix aux 3 vrais axes ISO (contre-tourne
@@ -6490,32 +6956,21 @@ function IsoChantier() {
                 f.hl && React.createElement("rect", { x: -w / 2 - 3, y: -size * 0.75, width: w + 6, height: size * 1.4, fill: "#F5E04A", opacity: 0.75, rx: 2 }),
                 React.createElement("text", { x: 0, y: size * 0.32, "font-size": size, "font-family": "'Archivo', sans-serif", "font-weight": f.bold ? 800 : 500, "font-style": f.italic ? "italic" : "normal", "text-decoration": f.ul ? "underline" : "none", fill: (f.color || COLORS.ink), "text-anchor": "middle" }, f.text || "")));
         }
-        else if (type === "mur")
+        else if (isStruct) {
+            const g = gcShape(f);
+            const col = f.color || COLORS.structure;
+            const d = (pts) => "M " + pts.map((q) => q.x.toFixed(2) + "," + q.y.toFixed(2)).join(" L ") + " Z";
+            const ns = { "vector-effect": "non-scaling-stroke" };
             body = (React.createElement(React.Fragment, null,
-                React.createElement("line", { x1: 0, y1: -48, x2: 0, y2: 48, ...sc }),
-                [-42, -28, -14, 0, 14, 28, 42].map((yy) => (React.createElement("line", { key: yy, x1: 0, y1: yy, x2: -9, y2: yy + 9, ...scT })))));
-        else if (type === "sol")
-            body = (React.createElement(React.Fragment, null,
-                React.createElement("line", { x1: -58, y1: 0, x2: 58, y2: 0, ...sc }),
-                [-52, -38, -24, -10, 4, 18, 32, 46].map((xx) => (React.createElement("line", { key: xx, x1: xx, y1: 0, x2: xx - 9, y2: 9, ...scT })))));
-        else if (type === "tremie") {
-            const S = 1.4 * UNIT;
-            const ax = COS30 * S, ay = 0.5 * S;
-            const bx = -COS30 * S * 0.7, by = 0.5 * S * 0.7;
-            const v = [
-                { x: ax + bx, y: ay + by }, { x: ax - bx, y: ay - by },
-                { x: -ax - bx, y: -ay - by }, { x: -ax + bx, y: -ay + by },
-            ];
-            body = (React.createElement(React.Fragment, null,
-                React.createElement("path", { d: `M ${v[0].x},${v[0].y} L ${v[1].x},${v[1].y} L ${v[2].x},${v[2].y} L ${v[3].x},${v[3].y} Z`, fill: "none", stroke: (f.color || COLORS.structure), "stroke-width": 1.6 * zst, "stroke-dasharray": "6 4", "vector-effect": "non-scaling-stroke" }),
-                React.createElement("line", { x1: v[0].x, y1: v[0].y, x2: v[2].x, y2: v[2].y, ...scT, "stroke-dasharray": "6 4" }),
-                React.createElement("line", { x1: v[1].x, y1: v[1].y, x2: v[3].x, y2: v[3].y, ...scT, "stroke-dasharray": "6 4" }),
-                React.createElement("text", { x: 0, y: -ay - by - 6, "font-size": 11, "font-family": "'IBM Plex Mono', monospace", fill: (f.color || COLORS.structure), "text-anchor": "middle" }, "tr\u00E9mie")));
+                g.faces.map((fc, i) => React.createElement("path", { key: "f" + i, d: d(fc.pts), fill: fc.dashed ? "none" : COLORS.paper, stroke: col, "stroke-width": (fc.main ? 1.5 : 1.1) * zst, "stroke-linejoin": "round", "stroke-dasharray": fc.dashed ? "5 3.5" : undefined, ...ns })),
+                g.hatch.map(([A, B], i) => React.createElement("line", { key: "h" + i, x1: A.x, y1: A.y, x2: B.x, y2: B.y, stroke: col, "stroke-width": 0.7 * zst, ...ns })),
+                g.diags.map(([A, B], i) => React.createElement("line", { key: "d" + i, x1: A.x, y1: A.y, x2: B.x, y2: B.y, stroke: col, "stroke-width": 0.9 * zst, ...ns }))));
         }
-        const drawAngle = isStruct || type === "texte" ? rot : baseAngle + rot;
+        const drawAngle = isStruct ? 0 : type === "texte" ? rot : baseAngle + rot;
         return (React.createElement("g", { transform: `translate(${x},${y}) rotate(${drawAngle})` },
-            halo && React.createElement("circle", { cx: 0, cy: 0, r: (isStruct ? 52 : 17) * scl, fill: "none", stroke: COLORS.accent, "stroke-width": 1.6, "stroke-dasharray": "4 3" }),
-            React.createElement("g", { transform: `scale(${scl})`, opacity: isStruct ? 0.55 : 1 }, body)));
+            halo && !isStruct && React.createElement("circle", { cx: 0, cy: 0, r: 17 * scl, fill: "none", stroke: COLORS.accent, "stroke-width": 1.6, "stroke-dasharray": "4 3" }),
+            React.createElement("g", { transform: `scale(${scl})` }, body),
+            halo && isStruct && React.createElement("path", { d: "M " + gcShape(f).hull.map((q) => (q.x * scl).toFixed(1) + "," + (q.y * scl).toFixed(1)).join(" L ") + " Z", fill: "none", stroke: COLORS.accent, "stroke-width": 1.6, "stroke-dasharray": "4 3" })));
     };
     const Arrow = ({ x, y, angle, color, sc = 1 }) => (React.createElement("path", { d: "M 0,0 L -8,-3 L -8,3 Z", fill: color, transform: `translate(${x},${y}) rotate(${angle}) scale(${sc})` }));
     const DimLine = ({ P, Q, value, color, off = 24, flip = false, awayFrom = null, tOff = null, alt = false }) => {
@@ -6867,7 +7322,35 @@ function IsoChantier() {
             React.createElement("circle", { cx: pY.x, cy: pY.y, ...handleStyle(COLORS.accent) }),
             React.createElement("circle", { cx: pZ.x, cy: pZ.y, ...handleStyle(COLORS.accent) })));
     };
+    // appareil en volume : corps gris clair (sous la tuyauterie), piquages
+    // côté arrière dessinés avant le corps, côté avant par-dessus
+    const renderAppliance = (f, halo) => {
+        const g = appPrims(f, proj);
+        const col = f.color || APP_COL.stroke;
+        const d = (pts, close) => "M " + pts.map((q) => q.x.toFixed(1) + "," + q.y.toFixed(1)).join(" L ") + (close ? " Z" : "");
+        const zl = Math.max(0.45, Math.min(1.4, zoom));
+        const isSelApp = f.id === selFit && (mode === "add" || mode === "select");
+        const stub = (n) => React.createElement("g", { key: n.id },
+            React.createElement("line", { x1: n.a.x, y1: n.a.y, x2: n.s.x, y2: n.s.y, stroke: isSelApp && n.id === selNoz ? COLORS.accent : col, "stroke-width": 2.6, "stroke-linecap": "butt" }),
+            n.flange && React.createElement("path", { d: ptsD(flangeBarScreen(n.flange[0], n.flange[1], n.sd, 1.7 * zl)), fill: APP_COL.flange, stroke: "none" }),
+            n.kind === "soude" && React.createElement("circle", { cx: n.b.x, cy: n.b.y, r: 3.4, fill: COLORS.pipe }));
+        return React.createElement("g", { key: f.id },
+            g.noz.filter((n) => n.back).map(stub),
+            React.createElement("path", { d: d(g.hull, true), fill: APP_COL.fill, stroke: col, "stroke-width": 1.5, "stroke-linejoin": "round" }),
+            React.createElement("path", { d: d(g.cap, true), fill: "none", stroke: col, "stroke-width": 1.2 }),
+            React.createElement("line", { x1: g.axisLine[0].x, y1: g.axisLine[0].y, x2: g.axisLine[1].x, y2: g.axisLine[1].y, stroke: APP_COL.axis, "stroke-width": 1, "stroke-dasharray": "12 3 2 3" }),
+            g.zig && React.createElement("path", { d: d(g.zig, false), fill: "none", stroke: APP_COL.detail, "stroke-width": 1.2, "stroke-linejoin": "round" }),
+            g.pump && React.createElement("path", { d: d(g.pump, true), fill: APP_COL.detail, stroke: "none" }),
+            g.noz.filter((n) => !n.back).map(stub),
+            isSelApp && g.noz.map((n, i) => {
+                const dx = n.b.x - n.a.x, dy = n.b.y - n.a.y, L = Math.hypot(dx, dy) || 1;
+                return React.createElement("text", { key: "l" + n.id, x: n.b.x + (dx / L) * 12, y: n.b.y + (dy / L) * 12 + 4, "font-size": 11, "font-weight": 800, "font-family": "'Archivo', sans-serif", fill: n.id === selNoz ? COLORS.accent : COLORS.cote, "text-anchor": "middle" }, String(i + 1));
+            }),
+            halo && React.createElement("path", { d: d(g.hull.map((q) => { const dx = q.x - g.center.x, dy = q.y - g.center.y, L = Math.hypot(dx, dy) || 1; return { x: q.x + (dx / L) * 5, y: q.y + (dy / L) * 5 }; }), true), fill: "none", stroke: COLORS.accent, "stroke-width": 1.6, "stroke-dasharray": "4 3" }));
+    };
     const renderFittings = (filterFn) => fittings.filter(filterFn || (() => true)).map((f) => {
+        if (isApp3(f))
+            return renderAppliance(f, ((mode === "add" || mode === "select") && f.id === selFit) || mFits.includes(f.id));
         const p = fittingScreen(f);
         if (!p)
             return null;
@@ -7037,7 +7520,7 @@ function IsoChantier() {
         const underBride = nodesUnderBrides();
         return (React.createElement(React.Fragment, null,
         Object.entries(nodes).map(([k, p]) => {
-            if (elbowByNode[k] || (underBride.has(k) && k !== current))
+            if (elbowByNode[k] || ((underBride.has(k) || nozzleNodes.has(k)) && k !== current))
                 return null;
             const s = proj(p);
             return React.createElement("circle", { key: k, cx: s.x, cy: s.y, r: k === current ? 5 : 2.6, fill: k === current ? COLORS.accent : COLORS.pipe });
@@ -7162,7 +7645,14 @@ function IsoChantier() {
             ys.push((p.x + p.y) * 0.5 - p.z);
         });
         fittings.forEach((f) => {
-            if (f.wx !== undefined) {
+            if (isApp3(f)) {
+                // encombrement du corps d'appareil (unités de grille)
+                appPrims(f, (p) => ({ x: (p.x - p.y) * COS30, y: (p.x + p.y) * 0.5 - p.z })).hull.forEach((q) => {
+                    xs.push(q.x);
+                    ys.push(q.y);
+                });
+            }
+            else if (f.wx !== undefined) {
                 xs.push(f.wx / UNIT);
                 ys.push(f.wy / UNIT);
             }
@@ -7200,6 +7690,10 @@ function IsoChantier() {
             const fittingScreenE = (f) => {
                 if (!f)
                     return null;
+                if (isApp3(f)) {
+                    const q = projE(f.p3);
+                    return { x: q.x, y: q.y, angle: 0 };
+                }
                 if (f.segId) {
                     const s = segments.find((x) => x.id === f.segId);
                     if (!s)
@@ -7215,19 +7709,11 @@ function IsoChantier() {
             };
             const structLineScreenE = (f) => {
                 const p = fittingScreenE(f);
-                if (!p)
+                if (!p || (f.type !== "mur" && f.type !== "sol"))
                     return null;
-                const local = f.type === "mur" ? [{ x: 0, y: -48 }, { x: 0, y: 48 }]
-                    : f.type === "sol" ? [{ x: -58, y: 0 }, { x: 58, y: 0 }] : null;
-                if (!local)
-                    return null;
-                const rad = ((f.rot || 0) * Math.PI) / 180;
+                const line = gcShape(f).line;
                 const scl = (f.scl || 1) * rv.zoom;
-                const cos = Math.cos(rad), sin = Math.sin(rad);
-                return local.map(({ x, y }) => ({
-                    x: p.x + (x * cos - y * sin) * scl,
-                    y: p.y + (x * sin + y * cos) * scl,
-                }));
+                return line.map((q) => ({ x: p.x + q.x * scl, y: p.y + q.y * scl }));
             };
             const resolvePointE = (p) => {
                 if (!p)
@@ -7265,8 +7751,10 @@ function IsoChantier() {
             const dnLabelPosE = (anchor) => {
                 var _a, _b;
                 const A = projE(nodes[anchor.a]), B = projE(nodes[anchor.b]);
-                const mid = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
-                return { mid, x: mid.x + ((_a = anchor.dnlx) !== null && _a !== void 0 ? _a : 40) * rv.zoom, y: mid.y + ((_b = anchor.dnly) !== null && _b !== void 0 ? _b : -44) * rv.zoom };
+                const c0 = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+                const tt = anchor.dnt != null ? anchor.dnt : 0.5;
+                const mid = { x: A.x + (B.x - A.x) * tt, y: A.y + (B.y - A.y) * tt };
+                return { mid, x: c0.x + ((_a = anchor.dnlx) !== null && _a !== void 0 ? _a : 40) * rv.zoom, y: c0.y + ((_b = anchor.dnly) !== null && _b !== void 0 ? _b : -44) * rv.zoom };
             };
             const c = document.createElement("canvas");
             c.width = Math.round(W * 2);
@@ -7489,6 +7977,73 @@ function IsoChantier() {
                     ctx.stroke();
                 }
             }
+            // ---- appareils en volume (sous la tuyauterie) ----
+            const drawApplianceE = (f) => {
+                const g = appPrims(f, projE);
+                const col = f.color || APP_COL.stroke;
+                const zlA = Math.max(0.45, Math.min(1.4, rv.zoom));
+                const poly = (pts, close) => {
+                    ctx.beginPath();
+                    pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
+                    if (close)
+                        ctx.closePath();
+                };
+                const line = (a, b, c, w) => {
+                    ctx.beginPath();
+                    ctx.moveTo(a.x, a.y);
+                    ctx.lineTo(b.x, b.y);
+                    ctx.strokeStyle = c;
+                    ctx.lineWidth = w;
+                    ctx.stroke();
+                };
+                const stub = (n) => {
+                    ctx.lineCap = "butt";
+                    line(n.a, n.s, col, 2.6);
+                    if (n.flange) {
+                        poly(flangeBarScreen(n.flange[0], n.flange[1], n.sd, 1.7 * zlA), true);
+                        ctx.fillStyle = APP_COL.flange;
+                        ctx.fill();
+                    }
+                    if (n.kind === "soude") {
+                        ctx.beginPath();
+                        ctx.arc(n.b.x, n.b.y, 3.4, 0, Math.PI * 2);
+                        ctx.fillStyle = COLORS.pipe;
+                        ctx.fill();
+                    }
+                };
+                ctx.save();
+                ctx.setLineDash([]);
+                ctx.lineJoin = "round";
+                g.noz.filter((n) => n.back).forEach(stub);
+                poly(g.hull, true);
+                ctx.fillStyle = APP_COL.fill;
+                ctx.fill();
+                ctx.strokeStyle = col;
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                poly(g.cap, true);
+                ctx.lineWidth = 1.2;
+                ctx.stroke();
+                ctx.setLineDash([12, 3, 2, 3]);
+                line(g.axisLine[0], g.axisLine[1], APP_COL.axis, 1);
+                ctx.setLineDash([]);
+                if (g.zig) {
+                    poly(g.zig, false);
+                    ctx.strokeStyle = APP_COL.detail;
+                    ctx.lineWidth = 1.2;
+                    ctx.stroke();
+                }
+                if (g.pump) {
+                    poly(g.pump, true);
+                    ctx.fillStyle = APP_COL.detail;
+                    ctx.fill();
+                }
+                g.noz.filter((n) => !n.back).forEach(stub);
+                ctx.restore();
+            };
+            for (const f of fittings)
+                if (isApp3(f))
+                    drawApplianceE(f);
             // ---- génie civil (arrière-plan, dessiné avant les tubes) ----
             for (const f of fittings) {
                 if (!STRUCTURE_TYPES.includes(f.type))
@@ -7663,7 +8218,7 @@ function IsoChantier() {
             // ---- nœuds de jonction (hors coudes et hors jeux de brides) ----
             const underBrideE = nodesUnderBrides();
             for (const [k, p] of Object.entries(nodes)) {
-                if (elbowByNode[k] || underBrideE.has(k))
+                if (elbowByNode[k] || underBrideE.has(k) || nozzleNodes.has(k))
                     continue;
                 const s = projE(p);
                 ctx.beginPath();
@@ -7677,11 +8232,11 @@ function IsoChantier() {
                 const isStruct = STRUCTURE_TYPES.includes(type);
                 const rot = f.rot || 0;
                 const scl = (f.scl || 1) * rv.zoom;
-                const drawAngle = isStruct || type === "texte" ? rot : baseAngle + rot;
+                const drawAngle = isStruct ? 0 : type === "texte" ? rot : baseAngle + rot;
                 ctx.save();
                 ctx.translate(x, y);
                 ctx.rotate((drawAngle * Math.PI) / 180);
-                ctx.globalAlpha = isStruct ? 0.55 : 1;
+                ctx.globalAlpha = 1;
                 ctx.save();
                 ctx.scale(scl || 0.001, scl || 0.001);
                 ctx.lineCap = "butt";
@@ -7749,25 +8304,23 @@ function IsoChantier() {
                     ctx.closePath();
                     fillInkPaper();
                     ctx.fill();
-                    ctx.strokeStyle = ink;
-                    ctx.lineWidth = 2;
-                    ctx.beginPath();
-                    ctx.moveTo(-3.5 - wBr.x, -wBr.y);
-                    ctx.lineTo(-3.5 + wBr.x, wBr.y);
-                    ctx.stroke();
-                    ctx.beginPath();
-                    ctx.moveTo(3.5 - wBr.x, -wBr.y);
-                    ctx.lineTo(3.5 + wBr.x, wBr.y);
-                    ctx.stroke();
+                    ctx.fillStyle = ink;
+                    for (const cxB of [-3.5, 3.5]) {
+                        const q = flangeBar(cxB, wBr, 1);
+                        ctx.beginPath();
+                        q.forEach((v, i) => (i ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y)));
+                        ctx.closePath();
+                        ctx.fill();
+                    }
                 }
                 else if (type === "bridesimple") {
                     const wBs = wingVecFor(f, baseAngle || 0, 8);
-                    ctx.strokeStyle = ink;
-                    ctx.lineWidth = 2;
+                    ctx.fillStyle = ink;
+                    const qBs = flangeBar(0, wBs, 1);
                     ctx.beginPath();
-                    ctx.moveTo(-wBs.x, -wBs.y);
-                    ctx.lineTo(wBs.x, wBs.y);
-                    ctx.stroke();
+                    qBs.forEach((v, i) => (i ? ctx.lineTo(v.x, v.y) : ctx.moveTo(v.x, v.y)));
+                    ctx.closePath();
+                    ctx.fill();
                 }
                 else if (type === "support") {
                     const radSup = ((baseAngle || 0) * Math.PI) / 180;
@@ -8215,9 +8768,9 @@ function IsoChantier() {
                     if (f.hl) {
                         const w = (String(f.text || "").length * size * 0.52) + 6;
                         ctx.fillStyle = "#F5E04A";
-                        ctx.globalAlpha = (isStruct ? 0.55 : 1) * 0.75;
+                        ctx.globalAlpha = 0.75;
                         ctx.fillRect(-w / 2 - 3, -size * 0.75, w + 6, size * 1.4);
-                        ctx.globalAlpha = isStruct ? 0.55 : 1;
+                        ctx.globalAlpha = 1;
                     }
                     drawTextE(f.text || "", 0, size * 0.32, size, f.color || COLORS.ink, {
                         weight: f.bold ? 800 : 500, italic: !!f.italic, baseline: "alphabetic",
@@ -8232,74 +8785,48 @@ function IsoChantier() {
                         ctx.stroke();
                     }
                 }
-                else if (type === "mur") {
-                    const W1 = (1.8 * zl) / scl, W2 = (1 * zl) / scl;
-                    ctx.strokeStyle = (f.color || COLORS.structure);
-                    ctx.lineWidth = W1;
-                    ctx.beginPath();
-                    ctx.moveTo(0, -48);
-                    ctx.lineTo(0, 48);
-                    ctx.stroke();
-                    ctx.lineWidth = W2;
-                    for (const yy of [-42, -28, -14, 0, 14, 28, 42]) {
+                else if (isStruct) {
+                    const g = gcShape(f);
+                    const col = f.color || COLORS.structure;
+                    const pathPts = (pts) => {
                         ctx.beginPath();
-                        ctx.moveTo(0, yy);
-                        ctx.lineTo(-9, yy + 9);
+                        pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)));
+                        ctx.closePath();
+                    };
+                    const canFill = true;
+                    ctx.strokeStyle = col;
+                    ctx.lineJoin = "round";
+                    for (const fc of g.faces) {
+                        pathPts(fc.pts);
+                        if (!fc.dashed && canFill) {
+                            ctx.fillStyle = bgColorForExport;
+                            ctx.fill();
+                        }
+                        ctx.lineWidth = ((fc.main ? 1.5 : 1.1) * zl) / scl;
+                        ctx.setLineDash(fc.dashed ? [5 / scl * zl, 3.5 / scl * zl] : []);
                         ctx.stroke();
                     }
-                }
-                else if (type === "sol") {
-                    const W1 = (1.8 * zl) / scl, W2 = (1 * zl) / scl;
-                    ctx.strokeStyle = (f.color || COLORS.structure);
-                    ctx.lineWidth = W1;
-                    ctx.beginPath();
-                    ctx.moveTo(-58, 0);
-                    ctx.lineTo(58, 0);
-                    ctx.stroke();
-                    ctx.lineWidth = W2;
-                    for (const xx of [-52, -38, -24, -10, 4, 18, 32, 46]) {
-                        ctx.beginPath();
-                        ctx.moveTo(xx, 0);
-                        ctx.lineTo(xx - 9, 9);
-                        ctx.stroke();
-                    }
-                }
-                else if (type === "tremie") {
-                    const S = 1.4 * UNIT;
-                    const ax = COS30 * S, ay = 0.5 * S;
-                    const bx = -COS30 * S * 0.7, by = 0.5 * S * 0.7;
-                    const v = [
-                        { x: ax + bx, y: ay + by }, { x: ax - bx, y: ay - by },
-                        { x: -ax - bx, y: -ay - by }, { x: -ax + bx, y: -ay + by },
-                    ];
-                    const W1 = (1.6 * zl) / scl, W2 = (1 * zl) / scl;
-                    ctx.strokeStyle = (f.color || COLORS.structure);
-                    ctx.lineWidth = W1;
-                    ctx.setLineDash([6 / scl, 4 / scl]);
-                    ctx.beginPath();
-                    ctx.moveTo(v[0].x, v[0].y);
-                    ctx.lineTo(v[1].x, v[1].y);
-                    ctx.lineTo(v[2].x, v[2].y);
-                    ctx.lineTo(v[3].x, v[3].y);
-                    ctx.closePath();
-                    ctx.stroke();
-                    ctx.lineWidth = W2;
-                    ctx.beginPath();
-                    ctx.moveTo(v[0].x, v[0].y);
-                    ctx.lineTo(v[2].x, v[2].y);
-                    ctx.stroke();
-                    ctx.beginPath();
-                    ctx.moveTo(v[1].x, v[1].y);
-                    ctx.lineTo(v[3].x, v[3].y);
-                    ctx.stroke();
                     ctx.setLineDash([]);
-                    drawTextE("trémie", 0, -ay - by - 6, 11, (f.color || COLORS.structure), { mono: true, baseline: "alphabetic" });
+                    ctx.lineWidth = (0.7 * zl) / scl;
+                    for (const [A, B] of g.hatch) {
+                        ctx.beginPath();
+                        ctx.moveTo(A.x, A.y);
+                        ctx.lineTo(B.x, B.y);
+                        ctx.stroke();
+                    }
+                    ctx.lineWidth = (0.9 * zl) / scl;
+                    for (const [A, B] of g.diags) {
+                        ctx.beginPath();
+                        ctx.moveTo(A.x, A.y);
+                        ctx.lineTo(B.x, B.y);
+                        ctx.stroke();
+                    }
                 }
                 ctx.restore();
                 ctx.restore();
             }
             for (const f of fittings) {
-                if (STRUCTURE_TYPES.includes(f.type))
+                if (STRUCTURE_TYPES.includes(f.type) || isApp3(f))
                     continue;
                 const p = fittingScreenE(f);
                 if (!p)
@@ -8665,7 +9192,8 @@ function IsoChantier() {
     const segFreeEnd = (s) => {
         if (!s)
             return null;
-        const cnt = (nk) => segments.filter((x) => x.id !== s.id && (x.a === nk || x.b === nk)).length;
+        // un bout raccordé à un piquage d'appareil n'est pas libre
+        const cnt = (nk) => nozzleNodes.has(nk) ? 1 : segments.filter((x) => x.id !== s.id && (x.a === nk || x.b === nk)).length;
         if (cnt(s.b) === 0)
             return "b";
         if (cnt(s.a) === 0)
@@ -8725,6 +9253,52 @@ function IsoChantier() {
     };
     const updateFit = (patch) => {
         setFittings((ff) => ff.map((f) => (f.id === selFit ? { ...f, ...patch } : f)));
+    };
+    // ---- appareils : corps + piquages ----
+    useEffect(() => { setSelNoz(null); }, [selFit]);
+    const updateApp = (fn) => {
+        snapshot();
+        setFittings((ff) => ff.map((f) => (f.id === selFit && isApp3(f) ? appNormalize(fn(f)) : f)));
+    };
+    const addNozzle = (kind) => {
+        const f = fittings.find((x) => x.id === selFit);
+        if (!isApp3(f))
+            return;
+        const ax = appAxis(f);
+        const pref = ax === "Z" ? ["+X", "+Y", "-X", "-Y", "+Z", "-Z"]
+            : ["+Z", "-Z", ...NOZ_DIRS.filter((d) => d[1] !== "Z" && d[1] !== ax), "+" + ax, "-" + ax];
+        const m = appAtMax(f);
+        const ats = m ? [-m, m, 0] : [0];
+        for (let i = 1; i < m; i++)
+            ats.push(-i, i);
+        let pick = null;
+        for (const d of pref) {
+            const axial = d[1] === ax;
+            for (const at of axial ? [0] : ats) {
+                if (!(f.noz || []).some((n) => n.dir === d && (axial || (n.at || 0) === at))) {
+                    pick = { dir: d, at };
+                    break;
+                }
+            }
+            if (pick)
+                break;
+        }
+        if (!pick)
+            pick = { dir: pref[0], at: 0 };
+        const n = { id: "z" + _id++, dir: pick.dir, at: pick.at, ext: 0, kind, node: nid() };
+        updateApp((x) => ({ ...x, noz: [...(x.noz || []), n] }));
+        setSelNoz(n.id);
+    };
+    const updateNoz = (fn) => updateApp((f) => ({ ...f, noz: (f.noz || []).map((n) => (n.id === selNoz ? { ...n, ...fn(n) } : n)) }));
+    const removeNoz = () => {
+        const f = fittings.find((x) => x.id === selFit);
+        const n = f && (f.noz || []).find((x) => x.id === selNoz);
+        if (!n)
+            return;
+        snapshot();
+        dropNozzleNodes([n.node]);
+        setFittings((ff) => ff.map((x) => (x.id === selFit ? { ...x, noz: (x.noz || []).filter((q) => q.id !== selNoz) } : x)));
+        setSelNoz(null);
     };
     // fait tourner la branche d'un té d'un axe iso au suivant
     const cycleBranch = (step) => {
@@ -8804,6 +9378,13 @@ function IsoChantier() {
             if (!f)
                 continue;
             const nf = { ...f, id: fid(), gid: newGid };
+            if (isApp3(f)) {
+                // appareil : décalé d'un pas de grille, piquages sur de nouveaux nœuds
+                nf.p3 = { x: f.p3.x + 1, y: f.p3.y + 1, z: f.p3.z };
+                nf.noz = (f.noz || []).map((n) => ({ ...n, id: "z" + _id++, node: nid() }));
+                newFits.push(nf);
+                continue;
+            }
             if (f.segId && segMap[f.segId])
                 nf.segId = segMap[f.segId];
             else if (f.segId)
@@ -8847,9 +9428,12 @@ function IsoChantier() {
         const segSet = new Set(mSegs);
         setFittings((ff) => ff.filter((f) => !mFits.includes(f.id) && !(f.segId && segSet.has(f.segId))));
         setFreeDims((dd) => dd.filter((d) => !(d.p1.f && mFits.includes(d.p1.f)) && !(d.p2.f && mFits.includes(d.p2.f))));
+        const delApps = new Set(mFits);
+        const keepNoz = new Set();
+        fittings.forEach((f) => { if (isApp3(f) && !delApps.has(f.id)) (f.noz || []).forEach((n) => n.node && keepNoz.add(n.node)); });
         setSegments((ss) => {
             const next = ss.filter((s) => !segSet.has(s.id));
-            const used = new Set(next.flatMap((s) => [s.a, s.b]));
+            const used = new Set([...next.flatMap((s) => [s.a, s.b]), ...keepNoz]);
             setNodes((n) => Object.fromEntries(Object.entries(n).filter(([k]) => used.has(k))));
             return next;
         });
@@ -8867,8 +9451,20 @@ function IsoChantier() {
         setFreeDims((dd) => dd.filter((d) => d.id !== selDim));
         setSelDim(null);
     };
+    // nœuds de piquages à retirer du tracé (seulement s'ils ne portent aucun tube)
+    const dropNozzleNodes = (nodeIds) => {
+        const usedBySeg = new Set(segments.flatMap((s) => [s.a, s.b]));
+        const del = nodeIds.filter((k) => k && !usedBySeg.has(k));
+        if (del.length)
+            setNodes((n) => { const c = { ...n }; del.forEach((k) => delete c[k]); return c; });
+        if (current && del.includes(current))
+            setCurrent(null);
+    };
     const removeFitting = (id) => {
         snapshot();
+        const fr = fittings.find((x) => x.id === id);
+        if (isApp3(fr))
+            dropNozzleNodes((fr.noz || []).map((n) => n.node));
         setFittings((f) => f.filter((x) => x.id !== id));
         setFreeDims((dd) => dd.filter((d) => d.p1.f !== id && d.p2.f !== id));
         if (selFit === id)
@@ -8879,7 +9475,7 @@ function IsoChantier() {
         setFittings((f) => f.filter((x) => x.segId !== selSeg));
         setSegments((ss) => {
             const next = ss.filter((s) => s.id !== selSeg);
-            const used = new Set(next.flatMap((s) => [s.a, s.b]));
+            const used = new Set([...next.flatMap((s) => [s.a, s.b]), ...nozzleNodes]);
             setNodes((n) => Object.fromEntries(Object.entries(n).filter(([k]) => used.has(k))));
             return next;
         });
@@ -9035,8 +9631,33 @@ function IsoChantier() {
         setTimeout(() => { setCatMenu(null); setCatClosing(false); }, 170);
     };
     // aperçu : le vrai symbole de l'appli, dessiné à taille fixe (indépendante du zoom)
-    const PREVIEW_SCALE = { mur: 0.32, sol: 0.32, tremie: 0.32, circulateur: 1.25, echangeur: 1.1, bache: 1.1, suite: 0.62, pente: 0.75 };
+    const PREVIEW_SCALE = { mur: 0.2, sol: 0.21, tremie: 0.42, circulateur: 1.25, echangeur: 1.1, bache: 1.1, suite: 0.62, pente: 0.75 };
+    // aperçu d'appareil : le vrai volume iso, mis à l'échelle de la vignette
+    const appPreviewSvg = (type, w, h) => {
+        const fake = { type, p3: { x: 0, y: 0, z: 0 }, axis3d: "X", noz: [{ id: "a", dir: "+Z", at: 0, ext: 0, kind: "bride" }] };
+        const unit = (q) => ({ x: (q.x - q.y) * COS30, y: (q.x + q.y) * 0.5 - q.z });
+        const g0 = appPrims(fake, unit);
+        const pts = [...g0.hull, ...g0.noz.flatMap((n) => [n.a, n.b])];
+        const minX = Math.min(...pts.map((q) => q.x)), maxX = Math.max(...pts.map((q) => q.x));
+        const minY = Math.min(...pts.map((q) => q.y)), maxY = Math.max(...pts.map((q) => q.y));
+        const k = Math.min((w - 10) / (maxX - minX), (h - 8) / (maxY - minY));
+        const P = (q) => { const u = unit(q); return { x: w / 2 + (u.x - (minX + maxX) / 2) * k, y: h / 2 + (u.y - (minY + maxY) / 2) * k }; };
+        const g = appPrims(fake, P);
+        const d = (pts2, close) => "M " + pts2.map((q) => q.x.toFixed(1) + "," + q.y.toFixed(1)).join(" L ") + (close ? " Z" : "");
+        return React.createElement("g", null,
+            React.createElement("path", { d: d(g.hull, true), fill: APP_COL.fill, stroke: APP_COL.stroke, "stroke-width": 1.1 }),
+            React.createElement("path", { d: d(g.cap, true), fill: "none", stroke: APP_COL.stroke, "stroke-width": 0.9 }),
+            g.zig && React.createElement("path", { d: d(g.zig, false), fill: "none", stroke: APP_COL.detail, "stroke-width": 0.9 }),
+            g.pump && React.createElement("path", { d: d(g.pump, true), fill: APP_COL.detail }),
+            g.noz.map((n) => React.createElement("g", { key: n.id },
+                React.createElement("line", { x1: n.a.x, y1: n.a.y, x2: n.s.x, y2: n.s.y, stroke: APP_COL.stroke, "stroke-width": 1.6 }),
+                n.flange && React.createElement("path", { d: ptsD(flangeBarScreen(n.flange[0], n.flange[1], n.sd, 1)), fill: APP_COL.flange }))));
+    };
     const itemPreview = (p) => {
+        if (APPAREIL_TYPES.has(p.type))
+            return React.createElement("svg", { width: 56, height: 36, viewBox: "0 0 56 36", style: { flexShrink: 0, display: "block", overflow: "hidden" } },
+                React.createElement("rect", { x: 0.5, y: 0.5, width: 55, height: 35, rx: 7, fill: "#fff", stroke: "rgba(60,60,67,0.18)" }),
+                appPreviewSvg(p.type, 56, 36));
         const k = PREVIEW_SCALE[p.type] || 1;
         const fake = { id: "__preview", type: p.type, sub: p.sub, shape: p.shape, scl: k / (zoom || 1), rot: 0 };
         if (p.type === "texte")
@@ -9144,10 +9765,10 @@ function IsoChantier() {
         React.createElement("div", { ref: containerRef, style: { flex: 1, position: "relative", overflow: "hidden" } },
             React.createElement("svg", { ref: svgRef, width: vp.w, height: vp.h, style: { display: rvRef.current ? "none" : "block", touchAction: "none" }, onPointerDown: handleDown, onPointerMove: handleMove, onPointerUp: handleUp, onPointerCancel: handleCancel, onPointerLeave: handleCancel },
                 gridLines.map(([a, b, strong], i) => (React.createElement("line", { key: i, x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: gridTheme === "blue" ? (strong ? "#96B3D1" : "#C3D5E8") : (strong ? COLORS.gridStrong : COLORS.grid), "stroke-width": strong ? 1.2 : 0.7 }))),
-                renderFittings((f) => STRUCTURE_TYPES.includes(f.type)),
+                renderFittings((f) => STRUCTURE_TYPES.includes(f.type) || isApp3(f)),
                 renderSegments(),
                 renderElbowArcs(),
-                renderFittings((f) => !STRUCTURE_TYPES.includes(f.type)),
+                renderFittings((f) => !STRUCTURE_TYPES.includes(f.type) && !isApp3(f)),
                 renderHelperBox(),
                 renderShapeHandle(),
                 renderFreeDims(),
@@ -9296,7 +9917,7 @@ function IsoChantier() {
                     background: COLORS.ink, color: "#fff", fontWeight: 700, fontSize: 13,
                     fontFamily: "'Archivo', sans-serif", cursor: "pointer",
                 } }, "\u2715 Annuler le premier point"))),
-        mode === "add" && !textTool && !selectedFitting && (addType.type === "echangeur" || addType.type === "bache") && (React.createElement("div", { style: {
+        mode === "add" && !textTool && !selectedFitting && APPAREIL_TYPES.has(addType.type) && (React.createElement("div", { style: {
                 background: COLORS.sheet, padding: "8px 12px",
                 display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap",
             } },
@@ -9347,9 +9968,12 @@ function IsoChantier() {
                         !isBride && React.createElement("button", { style: rev ? cbOn : cb, title: "Inverser le sens", onClick: () => updateFit({ rot: rev ? 0 : 180 }) }, "\u21C4"));
                 })() : (selectedFitting.type === "te" || selectedFitting.type === "tesw" || selectedFitting.type === "teoduit") ? (React.createElement(React.Fragment, null,
                     React.createElement("button", { style: cb, onClick: () => cycleBranch(-1) }, "\u27F2"),
-                    React.createElement("button", { style: cb, onClick: () => cycleBranch(1) }, "\u27F3"))) : (selectedFitting.type === "echangeur" || selectedFitting.type === "bache") ? (React.createElement(React.Fragment, null,
-                    [["X", "\u00E0 plat X"], ["Y", "\u00E0 plat Y"], ["Z", "vertical Z"]].map(([ax, lbl]) => React.createElement("button", { key: ax, style: (selectedFitting.axis3d || "X") === ax ? cbOn : cb, onClick: () => updateFit({ axis3d: ax }), title: lbl }, ax)),
-                    null)) : selectedFitting.type === "soudure" ? null : (React.createElement(React.Fragment, null,
+                    React.createElement("button", { style: cb, onClick: () => cycleBranch(1) }, "\u27F3"))) : isApp3(selectedFitting) ? (React.createElement(React.Fragment, null,
+                    [["X", "Couch\u00E9 suivant X"], ["Y", "Couch\u00E9 suivant Y"], ["Z", "Debout (Z)"]].map(([ax, lbl]) => React.createElement("button", { key: ax, style: appAxis(selectedFitting) === ax ? cbOn : cb, onClick: () => updateApp((f) => ({ ...f, axis3d: ax })), title: lbl }, ax)),
+                    selectedFitting.type === "circulateur" && React.createElement("button", { style: selectedFitting.flip ? cbOn : cb, title: "Sens du flux", onClick: () => updateApp((f) => ({ ...f, flip: !f.flip })) }, "\u21C4"))) : isStructSel ? (React.createElement(React.Fragment, null,
+                    (selectedFitting.type === "mur" ? [["X", "Voile suivant X"], ["Y", "Voile suivant Y"]]
+                        : selectedFitting.type === "tremie" ? [["H", "Trémie au sol"], ["X", "Trémie dans voile X"], ["Y", "Trémie dans voile Y"]]
+                            : []).map(([v, t]) => React.createElement("button", { key: v, style: gcPlane(selectedFitting) === v ? cbOn : cb, title: t, onClick: () => updateFit({ pl: v, rot: 0 }) }, v === "H" ? "Sol" : v)))) : selectedFitting.type === "soudure" ? null : (React.createElement(React.Fragment, null,
                     React.createElement("button", { style: cb, onClick: () => updateFit({
                             rot: isInlineSel
                                 ? Math.round((selectedFitting.rot || 0) / 60) * 60 - 60
@@ -9367,7 +9991,7 @@ function IsoChantier() {
                 (isStructSel || isInlineSel) && (React.createElement(React.Fragment, null,
                     React.createElement("button", { style: cb, onClick: () => updateFit({ scl: Math.min(isStructSel ? 8 : 3, (selectedFitting.scl || 1) + (isStructSel ? 0.25 : 0.15)) }) }, "\u25B2"),
                     React.createElement("button", { style: cb, onClick: () => updateFit({ scl: Math.max(isStructSel ? 0.4 : 0.5, (selectedFitting.scl || 1) - (isStructSel ? 0.2 : 0.15)) }) }, "\u25BC"))),
-                React.createElement(ColorSwatch, { title: "Couleur", value: selectedFitting.color || (isStructSel ? COLORS.structure : COLORS.ink), onChange: (c) => updateFit({ color: c }) }),
+                React.createElement(ColorSwatch, { title: "Couleur", value: selectedFitting.color || (isStructSel ? COLORS.structure : isApp3(selectedFitting) ? APP_COL.stroke : COLORS.ink), onChange: (c) => updateFit({ color: c }) }),
                 React.createElement("button", { title: "Dupliquer", "aria-label": "Dupliquer", style: { ...cb, marginLeft: "auto", fontSize: 20 }, onClick: () => duplicateSelection([], [selFit]) }, "+"),
                 React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: () => removeFitting(selFit), style: { ...cb, fontSize: 17, borderColor: "#B3341C", color: "#B3341C" } }, "\u2715")),
             selectedFitting.type === "teoduit" && (React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
@@ -9376,18 +10000,51 @@ function IsoChantier() {
                     React.createElement("option", { value: "" }, "= DN ligne"),
                     DN_LIST.map((d) => React.createElement("option", { key: d, value: d }, "DN", d))),
                 React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "n'affecte pas le DN du tron\u00E7on"))),
-            (selectedFitting.type === "echangeur" || selectedFitting.type === "bache") && (React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontSize: 12, color: COLORS.cote } }, "\u00D8 virole (mm) :"),
-                React.createElement("input", { type: "number", min: 50, step: 10, value: selectedFitting.shellDia || 100, onInput: (e) => updateFit({ shellDia: e.target.value ? +e.target.value : null }), style: { ...field, width: 80 } }),
-                React.createElement("span", { style: { fontSize: 12, color: COLORS.cote } }, "Long. (mm) :"),
-                React.createElement("input", { type: "number", min: 50, step: 10, placeholder: "auto", value: selectedFitting.shellLen || "", onInput: (e) => updateFit({ shellLen: e.target.value ? +e.target.value : null }), style: { ...field, width: 80 } }),
-                React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "corps 3D"))),
-            (selectedFitting.type === "echangeur" || selectedFitting.type === "bache") && (React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
-                React.createElement("span", { style: { fontSize: 12, color: COLORS.cote } }, "Position sur l'axe :"),
-                React.createElement("button", { style: sideBtn, onClick: () => updateFit({ axOff: (selectedFitting.axOff || 0) - 50 }) }, "\u2212"),
-                React.createElement("input", { type: "number", step: 10, value: selectedFitting.axOff || 0, onInput: (e) => updateFit({ axOff: e.target.value ? +e.target.value : 0 }), style: { ...field, width: 80 } }),
-                React.createElement("button", { style: sideBtn, onClick: () => updateFit({ axOff: (selectedFitting.axOff || 0) + 50 }) }, "+"),
-                React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, fontFamily: "'IBM Plex Mono', monospace" } }, "mm le long de l'axe " + (selectedFitting.axis3d || "X")))),
+            isApp3(selectedFitting) && (() => {
+                const f = selectedFitting;
+                const lab = (t) => React.createElement("span", { style: { fontSize: 12, fontWeight: 800, color: COLORS.cote, marginLeft: 4 } }, t);
+                const row = (kids) => React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "nowrap", overflowX: "auto" } }, ...kids);
+                const nz = (f.noz || []).find((n) => n.id === selNoz);
+                const nzAxial = nz && (nozIsAxial(f, nz) || appAtMax(f) === 0);
+                return React.createElement(React.Fragment, null,
+                    row([
+                        lab("\u00D8"),
+                        React.createElement("button", { key: "r-", style: cb, title: "Diam\u00E8tre \u2212", onClick: () => updateApp((x) => ({ ...x, gR: Math.max(0.25, appR(x) - 0.25) })) }, "\u2212"),
+                        React.createElement("button", { key: "r+", style: cb, title: "Diam\u00E8tre +", onClick: () => updateApp((x) => ({ ...x, gR: Math.min(8, appR(x) + 0.25) })) }, "+"),
+                        lab("Long."),
+                        React.createElement("button", { key: "l-", style: cb, title: "Longueur \u2212", onClick: () => updateApp((x) => ({ ...x, gL: Math.max(0.5, appL(x) - 0.5) })) }, "\u2212"),
+                        React.createElement("button", { key: "l+", style: cb, title: "Longueur +", onClick: () => updateApp((x) => ({ ...x, gL: Math.min(40, appL(x) + 0.5) })) }, "+"),
+                        lab("Haut."),
+                        React.createElement("button", { key: "z-", style: cb, title: "Descendre", onClick: () => updateApp((x) => ({ ...x, p3: { ...x.p3, z: x.p3.z - 1 } })) }, "\u2193"),
+                        React.createElement("button", { key: "z+", style: cb, title: "Monter", onClick: () => updateApp((x) => ({ ...x, p3: { ...x.p3, z: x.p3.z + 1 } })) }, "\u2191"),
+                    ]),
+                    row([
+                        lab("PIQUAGES"),
+                        ...(f.noz || []).map((n, i) => React.createElement("button", { key: n.id, style: n.id === selNoz ? cbOn : cb, title: n.kind === "bride" ? "Piquage \u00E0 bride" : "Piquage soud\u00E9", onClick: () => setSelNoz(n.id === selNoz ? null : n.id) }, String(i + 1))),
+                        React.createElement("button", { key: "addB", style: { ...cb, padding: "0 10px" }, onClick: () => addNozzle("bride") }, "+ Bride"),
+                        React.createElement("button", { key: "addS", style: { ...cb, padding: "0 10px" }, onClick: () => addNozzle("soude") }, "+ Soud\u00E9"),
+                    ]),
+                    nz && row([
+                        ...NOZ_DIRS.map((d) => React.createElement("button", { key: d, style: nz.dir === d ? cbOn : cb, title: "Sortie vers " + d, onClick: () => updateNoz(() => ({ dir: d, ext: 0 })) }, d.replace("-", "\u2212"))),
+                    ]),
+                    nz && nz.kind === "bride" && row([
+                        lab("Collerette"),
+                        ...["X", "Y", "Z"].filter((a) => a !== nz.dir[1]).map((a) => {
+                            const cur = nz.fAx && nz.fAx !== nz.dir[1] ? nz.fAx : nozFlangeAxis(f, nz);
+                            return React.createElement("button", { key: "fa" + a, style: cur === a ? cbOn : cb, title: "Trait suivant l'axe " + a, onClick: () => updateNoz(() => ({ fAx: a })) }, a);
+                        }),
+                    ]),
+                    nz && row([
+                        lab("Pos."),
+                        React.createElement("button", { key: "p-", style: { ...cb, opacity: nzAxial ? 0.35 : 1 }, disabled: nzAxial, title: "Glisser le long de l'appareil", onClick: () => updateNoz((n) => ({ at: (n.at || 0) - 1 })) }, "\u25C0"),
+                        React.createElement("button", { key: "p+", style: { ...cb, opacity: nzAxial ? 0.35 : 1 }, disabled: nzAxial, title: "Glisser le long de l'appareil", onClick: () => updateNoz((n) => ({ at: (n.at || 0) + 1 })) }, "\u25B6"),
+                        lab("Long."),
+                        React.createElement("button", { key: "e-", style: cb, title: "Raccourcir", onClick: () => updateNoz((n) => ({ ext: nozFix(f, n).ext - 1 })) }, "\u2212"),
+                        React.createElement("button", { key: "e+", style: cb, title: "Allonger", onClick: () => updateNoz((n) => ({ ext: nozFix(f, n).ext + 1 })) }, "+"),
+                        React.createElement("button", { key: "k", style: { ...cb, padding: "0 10px" }, title: "Bride / soud\u00E9", onClick: () => updateNoz((n) => ({ kind: n.kind === "bride" ? "soude" : "bride" })) }, nz.kind === "bride" ? "Bride" : "Soud\u00E9"),
+                        React.createElement("button", { key: "x", title: "Supprimer le piquage", "aria-label": "Supprimer le piquage", onClick: removeNoz, style: { ...cb, marginLeft: "auto", fontSize: 17, borderColor: "#B3341C", color: "#B3341C" } }, "\u2715"),
+                    ]));
+            })(),
             selectedFitting.type === "texte" && (React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
                 React.createElement("input", { type: "text", value: selectedFitting.text || "", onInput: (e) => updateFit({ text: e.target.value }), placeholder: "Votre texte\u2026", style: { ...field, width: 160, flexGrow: 1 } }),
                 React.createElement("button", { style: sideBtn, onClick: () => updateFit({ size: Math.min(40, (selectedFitting.size || 13) + 2) }) }, "A+"),
