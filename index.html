@@ -371,6 +371,46 @@ const showImageSaveOverlay = (dataUrl) => {
     ov.appendChild(close);
     document.body.appendChild(ov);
 };
+// PDF construit directement (image JPEG pleine page) — pas de passage par
+// l'impression du navigateur, donc ni date, ni titre, ni bouton, ni lien
+// ajoutés en en-tête / pied de page
+const buildImagePdf = (jpegDataUrl, imgW, imgH) => {
+    const bin = atob(jpegDataUrl.split(",")[1]);
+    const img = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++)
+        img[i] = bin.charCodeAt(i);
+    const land = imgW >= imgH;
+    const PW = land ? 842 : 595, PH = land ? 595 : 842, M = 18;
+    const k = Math.min((PW - 2 * M) / imgW, (PH - 2 * M) / imgH);
+    const dw = imgW * k, dh = imgH * k, dx = (PW - dw) / 2, dy = (PH - dh) / 2;
+    const enc = (t) => { const a = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) a[i] = t.charCodeAt(i) & 255; return a; };
+    const content = `q ${dw.toFixed(2)} 0 0 ${dh.toFixed(2)} ${dx.toFixed(2)} ${dy.toFixed(2)} cm /Im0 Do Q`;
+    const parts = [];
+    const offs = [];
+    let len = 0;
+    const push = (u) => { parts.push(u); len += u.length; };
+    push(enc("%PDF-1.4\n%\u00E2\u00E3\u00CF\u00D3\n"));
+    const obj = (n, body, stream) => {
+        offs[n] = len;
+        push(enc(n + " 0 obj\n" + body + (stream ? "\nstream\n" : "\nendobj\n")));
+        if (stream) {
+            push(stream);
+            push(enc("\nendstream\nendobj\n"));
+        }
+    };
+    obj(1, "<< /Type /Catalog /Pages 2 0 R >>");
+    obj(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    obj(3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PW} ${PH}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`);
+    obj(4, `<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${img.length} >>`, img);
+    const cs = enc(content);
+    obj(5, `<< /Length ${cs.length} >>`, cs);
+    const xref = len;
+    let x = "xref\n0 6\n0000000000 65535 f \n";
+    for (let n = 1; n <= 5; n++)
+        x += String(offs[n]).padStart(10, "0") + " 00000 n \n";
+    push(enc(x + "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n" + xref + "\n%%EOF\n"));
+    return new Blob(parts, { type: "application/pdf" });
+};
 const saveBlobFile = (blob, name, previewDataUrl) => {
     const download = () => {
         if (IS_APPLE_TOUCH && previewDataUrl) {
@@ -2204,7 +2244,7 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
     // découpe du trait d'axe qui le traverse (fittingGaps), pour qu'elles
     // restent cohérentes si on ajuste la taille de l'appareil
     const EXCH_HALF_LEN = 2.6;
-    const VOLUMETRIC_HALF_LEN = { vanne: 1.7, boule: 1.25, vpapillon: 0.16, clapet: 1.25, reduction: 0.75, bobine: 1.35, bobinef: 1.35 };
+    const VOLUMETRIC_HALF_LEN = { vanne: 1.7, boule: 1.25, vpapillon: 0.16, clapet: 2.3, reduction: 0.75, bobine: 1.35, bobinef: 1.35 };
     const fittingGaps = fittings
         .filter((f) => VOLUMETRIC_FITTING_TYPES.includes(f.type) && f.segId != null)
         .map((f) => {
@@ -3347,15 +3387,80 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
                 ];
             }
             case "clapet": {
-                // clapet anti-retour : corps évasé dans le sens du flux (dir),
-                // pas de tige/levier — automatique par nature
-                const bodyHalfLen = pr * 0.85, flangeR = pr * 1.6, flangeHalfThick = pr * 0.2;
-                const flowAxis = { x: tangent.x * dir, y: tangent.y * dir, z: tangent.z * dir };
-                return [
-                    ...coneSolid(pos, flowAxis, pr * 1.05, pr * 1.25, bodyHalfLen, bc, N_FIT),
-                    ...discSolid(centerAt(-bodyHalfLen - flangeHalfThick), tangent, flangeR, flangeHalfThick, bc, N_FIT, true),
-                    ...discSolid(centerAt(bodyHalfLen + flangeHalfThick), tangent, flangeR, flangeHalfThick, bc, N_FIT, true),
-                ];
+                // clapet à battant forgé (type nucléaire, embouts à emboîter-
+                // souder) : 2 manchons d'extrémité avec méplats de clé, corps
+                // central à fond bombé, chapeau carré boulonné (4 écrous) +
+                // bouchon hexagonal central, bossage latéral avec flèche de
+                // sens d'écoulement (dir). Chapeau toujours vers le haut réel
+                // (battant gravitaire) sauf tube vertical → suit la rotation
+                let up;
+                if (Math.abs(tangent.z) < 0.9) {
+                    const u0 = { x: -tangent.z * tangent.x, y: -tangent.z * tangent.y, z: 1 - tangent.z * tangent.z };
+                    const ul = Math.hypot(u0.x, u0.y, u0.z) || 1;
+                    up = { x: u0.x / ul, y: u0.y / ul, z: u0.z / ul };
+                }
+                else
+                    up = wing;
+                const side = {
+                    x: tangent.y * up.z - tangent.z * up.y,
+                    y: tangent.z * up.x - tangent.x * up.z,
+                    z: tangent.x * up.y - tangent.y * up.x,
+                };
+                const Q = (t, u, n) => ({
+                    x: pos.x + tangent.x * t + up.x * u + side.x * n,
+                    y: pos.y + tangent.y * t + up.y * u + side.y * n,
+                    z: pos.z + tangent.z * t + up.z * u + side.z * n,
+                });
+                const neg = (v) => ({ x: -v.x, y: -v.y, z: -v.z });
+                const box = (c, ht, hu, hn, col) => {
+                    const k = (st, su, sn) => Q(c.t + st * ht, c.u + su * hu, c.n + sn * hn);
+                    const q = (a, b, d, e, nrm) => ({ kind: "poly", pts: [a, b, d, e], fill: faceShade(nrm, col || bc) });
+                    return [
+                        q(k(1, -1, -1), k(1, 1, -1), k(1, 1, 1), k(1, -1, 1), tangent),
+                        q(k(-1, -1, 1), k(-1, 1, 1), k(-1, 1, -1), k(-1, -1, -1), neg(tangent)),
+                        q(k(-1, 1, -1), k(1, 1, -1), k(1, 1, 1), k(-1, 1, 1), up),
+                        q(k(-1, -1, 1), k(1, -1, 1), k(1, -1, -1), k(-1, -1, -1), neg(up)),
+                        q(k(-1, -1, 1), k(-1, 1, 1), k(1, 1, 1), k(1, -1, 1), side),
+                        q(k(1, -1, -1), k(1, 1, -1), k(-1, 1, -1), k(-1, -1, -1), neg(side)),
+                    ];
+                };
+                const hubR = pr * 1.42, hubIn = pr * 1.15, hubOut = pr * 2.3;
+                const bodyR = pr * 1.5, bodyTop = pr * 1.05, bodyBot = pr * 1.35;
+                const neckH = pr * 1.5, neckTop = bodyTop + pr * 0.5;
+                const capH = pr * 1.68, capTop = neckTop + pr * 0.5;
+                const out = [];
+                // manchons à emboîter-souder + méplats de clé latéraux
+                [-1, 1].forEach((sg) => {
+                    const hc = sg * (hubIn + hubOut) / 2, hh = (hubOut - hubIn) / 2;
+                    out.push(...discSolid(centerAt(hc), tangent, hubR, hh, bc, 12, true));
+                    out.push(...discSolid(centerAt(sg * (hubOut - pr * 0.02)), tangent, pr * 1.04, pr * 0.03, "#2E3338", 12, true));
+                    [-1, 1].forEach((sn) => out.push(...box({ t: hc, u: 0, n: sn * hubR * 0.93 }, hh * 0.55, pr * 0.42, pr * 0.1)));
+                });
+                // corps traversant + fût vertical + fond bombé
+                out.push(...discSolid(pos, tangent, pr * 1.3, hubIn, bc, 12, true));
+                out.push(...discSolid(Q(0, (bodyTop - bodyBot) / 2, 0), up, bodyR, (bodyTop + bodyBot) / 2, bc, 12, true));
+                const dome = [];
+                for (let i = 0; i <= 5; i++) {
+                    const a = (i / 5) * (Math.PI / 2);
+                    dome.push({ z: pr * 0.7 * Math.sin(a), r: bodyR * Math.cos(a) });
+                }
+                out.push(...revolveProfile(Q(0, -bodyBot, 0), neg(up), dome, bc, 12));
+                // col carré + chapeau boulonné
+                out.push(...box({ t: 0, u: (bodyTop + neckTop) / 2 - pr * 0.1, n: 0 }, neckH, (neckTop - bodyTop) / 2 + pr * 0.1, neckH));
+                out.push(...box({ t: 0, u: (neckTop + capTop) / 2, n: 0 }, capH, (capTop - neckTop) / 2, capH));
+                const nutR = pr * 0.3, nutH = pr * 0.2;
+                [[-1, -1], [-1, 1], [1, -1], [1, 1]].forEach(([a, b]) => {
+                    out.push(...discSolid(Q(a * capH * 0.72, capTop + nutH, b * capH * 0.72), up, nutR, nutH, bc, 6, true));
+                });
+                out.push(...discSolid(Q(0, capTop + pr * 0.3, 0), up, pr * 0.46, pr * 0.3, bc, 6, true));
+                // bossages latéraux avec flèche de sens d'écoulement
+                [-1, 1].forEach((sn) => {
+                    out.push(...box({ t: 0, u: pr * 0.35, n: sn * (bodyR + pr * 0.02) }, pr * 0.6, pr * 0.42, pr * 0.12));
+                    const ah = pr * 0.45 * dir, aw = pr * 0.16, u0 = pr * 0.35;
+                    const nArr = sn * (bodyR + pr * 0.16);
+                    out.push({ kind: "poly", pts: [Q(-ah, u0 - aw * 0.45, nArr), Q(ah * 0.25, u0 - aw * 0.45, nArr), Q(ah * 0.25, u0 - aw, nArr), Q(ah, u0, nArr), Q(ah * 0.25, u0 + aw, nArr), Q(ah * 0.25, u0 + aw * 0.45, nArr), Q(-ah, u0 + aw * 0.45, nArr)], fill: "#2E3338" });
+                });
+                return out;
             }
             case "reduction": {
                 // réduction concentrique : tronc de cône orienté par dir
@@ -4365,6 +4470,7 @@ function IsoChantier() {
     const [showDebit, setShowDebit] = useState(false);
     const [settingsAnchor, setSettingsAnchor] = useState(null);
     const [showPrintPanel, setShowPrintPanel] = useState(false);
+    const [exportBom, setExportBom] = useState(true); // nomenclature sur l'export PNG/PDF
     const [toolsAnchor, setToolsAnchor] = useState(null);
     const [menuClosing, setMenuClosing] = useState(false);
     const [catMenu, setCatMenu] = useState(null); // { left, bottom, ox } quand la fenêtre des catégories est ouverte
@@ -8022,9 +8128,56 @@ function IsoChantier() {
                 ys.push(f.wy / UNIT);
             }
         });
+        // étiquettes (DN, noms de tronçon, noms d'organe) : leur cadre fait
+        // partie du dessin exporté — positions en px monde (zoom 1) / UNIT
+        const wp = (p) => ({ x: (p.x - p.y) * COS30, y: (p.x + p.y) * 0.5 - p.z });
+        const addLab = (anc, lx, ly, txtLen, k) => {
+            const hw = (txtLen * 0.68 + 1.2) * 11 * (k || 1) / 2 + 4, hh = 12 * (k || 1);
+            const cxL = anc.x * UNIT + lx, cyL = anc.y * UNIT + ly;
+            xs.push((cxL - hw) / UNIT, (cxL + hw) / UNIT);
+            ys.push((cyL - hh) / UNIT, (cyL + hh) / UNIT);
+        };
+        segments.forEach((sg) => {
+            if (!nodes[sg.a] || !nodes[sg.b])
+                return;
+            const A = wp(nodes[sg.a]), B = wp(nodes[sg.b]);
+            const c0 = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+            if (sg.casse && sg.casse.corner) {
+                const C = wp(sg.casse.corner);
+                xs.push(C.x);
+                ys.push(C.y);
+            }
+            if (sg.name && !sg.nameHidden)
+                addLab(c0, sg.namelx != null ? sg.namelx : -40, sg.namely != null ? sg.namely : 44, sg.name.length, sg.nameFs);
+        });
+        dnGroups.forEach((g) => {
+            const sg = g.anchor;
+            if (!nodes[sg.a] || !nodes[sg.b])
+                return;
+            const A = wp(nodes[sg.a]), B = wp(nodes[sg.b]);
+            addLab({ x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 }, sg.dnlx != null ? sg.dnlx : 40, sg.dnly != null ? sg.dnly : -44, 5, sg.dnFs);
+        });
+        fittings.forEach((f) => {
+            if (!f.name || f.nameHidden)
+                return;
+            let p = null;
+            if (isApp3(f))
+                p = wp(f.p3);
+            else if (f.segId) {
+                const sg = segments.find((x) => x.id === f.segId);
+                if (sg && nodes[sg.a] && nodes[sg.b]) {
+                    const A = wp(nodes[sg.a]), B = wp(nodes[sg.b]), t = f.t != null ? f.t : 0.5;
+                    p = { x: A.x + (B.x - A.x) * t, y: A.y + (B.y - A.y) * t };
+                }
+            }
+            else if (f.wx !== undefined)
+                p = { x: f.wx / UNIT, y: f.wy / UNIT };
+            if (p)
+                addLab(p, f.fnlx != null ? f.fnlx : 44, f.fnly != null ? f.fnly : -40, f.name.length, f.nameFs);
+        });
         let box;
         if (xs.length) {
-            const pad = 3.5;
+            const pad = 1.6; // marge pour cotes, symboles et textes
             box = { minX: Math.min(...xs) - pad, maxX: Math.max(...xs) + pad,
                 minY: Math.min(...ys) - pad, maxY: Math.max(...ys) + pad };
         }
@@ -8033,17 +8186,49 @@ function IsoChantier() {
         }
         const spanX = Math.max(1, (box.maxX - box.minX) * UNIT);
         const spanY = Math.max(1, (box.maxY - box.minY) * UNIT);
-        const W = Math.round(Math.max(1000, Math.min(3600, spanX + 160)));
-        const H = Math.round(Math.max(760, Math.min(3600, spanY + 320)));
-        const zoomE = Math.min((W - 120) / spanX, (H - 320) / spanY, 2.2);
+        // page au format A4 (paysage ou portrait selon le dessin), le dessin
+        // occupe toute la zone libre sans chevaucher cartouche / nomenclature
+        // orientation A4 (paysage / portrait) et disposition retenues : celles
+        // qui laissent le dessin le plus grand
+        let nomRows = 0;
+        if (exportBom) {
+            nomRows = Object.keys(bom.byDn).length + 2 + (bom.autres || []).length + (bom.nCasses ? 1 : 0) + (bom.nPiquages ? 1 : 0) + Object.keys(bom.fitCount).length;
+            const na = Object.keys(bom.appareilCount).length;
+            if (na)
+                nomRows += 1 + na;
+        }
+        const M = 24, T = 50;
+        const below = cart.on && cart.pos === "below";
+        let best = null;
+        [true, false].forEach((land) => {
+            const W = land ? 1600 : 1131, H = land ? 1131 : 1600;
+            const CK = W / 900, NK = W / 1100;
+            const cartH = cart.on ? 132 * CK : 0;
+            const nomW = nomRows ? 216 * NK : 0, nomH = nomRows ? (26 + nomRows * 17) * NK : 0;
+            const layouts = [
+                { L: M, B: Math.max(cartH, below ? cartH + nomH + 8 : nomH) + (cartH || nomH ? 20 : 0) + M },
+            ];
+            if (nomH && !below)
+                layouts.push({ L: M + nomW + 16, B: (cartH ? cartH + 20 : 0) + M });
+            layouts.forEach((ly) => {
+                const aw = W - ly.L - M, ah = H - T - ly.B;
+                const z = Math.min(aw / spanX, ah / spanY, 3);
+                if (!best || z > best.z + 1e-9)
+                    best = { ...ly, z, aw, ah, W, H, CK, NK };
+            });
+        });
+        const { W, H, CK, NK } = best;
+        const zoomE = best.z;
         const cx = (box.minX + box.maxX) / 2 * UNIT;
         const cy = (box.minY + box.maxY) / 2 * UNIT;
-        return { W, H, zoomE, cx, cy };
+        // centre de la zone de dessin (en px page)
+        const rcx = best.L + best.aw / 2, rcy = T + best.ah / 2;
+        return { W, H, zoomE, cx, cy, rcx, rcy, CK, NK };
     };
     const exportPng = (mode) => {
         try {
-            const { W, H, zoomE, cx, cy } = computeExportBox();
-            const rv = { w: W, h: H, zoom: zoomE, offX: -cx * zoomE, offY: -cy * zoomE - 40 };
+            const { W, H, zoomE, cx, cy, rcx, rcy, CK, NK } = computeExportBox();
+            const rv = { w: W, h: H, zoom: zoomE, offX: rcx - W / 2 - cx * zoomE, offY: rcy - H / 2 - cy * zoomE };
             const zl = Math.max(0.45, rv.zoom);
             const U = UNIT * rv.zoom;
             // ---- projections paramétrées sur la vue d'export (indépendantes de l'écran) ----
@@ -9318,6 +9503,7 @@ function IsoChantier() {
             }
             // ---- nomenclature ----
             let nomBox = null;
+            // cartouche agrandi, proportionnel à la taille de l'export (CK)
             (() => {
                 const rows = [];
                 Object.entries(bom.byDn).forEach(([k, v]) => rows.push(["Tube " + k, v + " mm"]));
@@ -9333,12 +9519,12 @@ function IsoChantier() {
                     rows.push(["APPAREILS", "", true]);
                     Object.entries(bom.appareilCount).forEach(([k, v]) => rows.push([k, "" + v]));
                 }
-                if (!rows.length)
+                if (!rows.length || !exportBom)
                     return;
-                const w = 216, rh = 17, h = 26 + rows.length * rh;
+                const w = 216 * NK, rh = 17 * NK, h = 26 * NK + rows.length * rh;
                 // si le cartouche doit se placer sous la nomenclature, celle-ci
                 // remonte pour lui laisser la place tout en restant en bas
-                const cartH = cart.on ? 106 : 0;
+                const cartH = cart.on ? Math.round(132 * CK) : 0;
                 const extra = cart.on && cart.pos === "below" ? cartH + 8 : 0;
                 const x0 = 12, y0 = H - 12 - h - extra;
                 nomBox = { x0, y0, w, h };
@@ -9347,19 +9533,20 @@ function IsoChantier() {
                 ctx.strokeStyle = COLORS.ink;
                 ctx.lineWidth = 1.4;
                 ctx.strokeRect(x0, y0, w, h);
-                drawTextE("NOMENCLATURE", x0 + 8, y0 + 16, 11, COLORS.ink, { weight: 800, align: "left", baseline: "alphabetic" });
+                drawTextE("NOMENCLATURE", x0 + 8 * NK, y0 + 16 * NK, 11 * NK, COLORS.ink, { weight: 800, align: "left", baseline: "alphabetic" });
                 rows.forEach((ln, i) => {
                     if (ln[2]) {
-                        drawTextE(ln[0], x0 + 8, y0 + 32 + i * rh, 9.5, COLORS.ink, { weight: 800, align: "left", baseline: "alphabetic" });
+                        drawTextE(ln[0], x0 + 8 * NK, y0 + 32 * NK + i * rh, 9.5 * NK, COLORS.ink, { weight: 800, align: "left", baseline: "alphabetic" });
                         return;
                     }
-                    drawTextE(ln[0], x0 + 8, y0 + 32 + i * rh, 10, COLORS.ink, { mono: true, align: "left", baseline: "alphabetic" });
-                    drawTextE(ln[1], x0 + w - 8, y0 + 32 + i * rh, 10, COLORS.ink, { mono: true, align: "right", baseline: "alphabetic" });
+                    drawTextE(ln[0], x0 + 8 * NK, y0 + 32 * NK + i * rh, 10 * NK, COLORS.ink, { mono: true, align: "left", baseline: "alphabetic" });
+                    drawTextE(ln[1], x0 + w - 8 * NK, y0 + 32 * NK + i * rh, 10 * NK, COLORS.ink, { mono: true, align: "right", baseline: "alphabetic" });
                 });
             })();
             // ---- cartouche ----
             if (cart.on) {
-                const w = 290, h = 132;
+                const K = CK;
+                const w = 290 * K, h = 132 * K;
                 let x0, y0;
                 if (cart.pos === "below" && nomBox) {
                     x0 = nomBox.x0;
@@ -9373,44 +9560,45 @@ function IsoChantier() {
                     x0 = W - w - 8;
                     y0 = H - h - 8;
                 }
+                const hd = 28 * K, rowH = 26 * K;
                 ctx.fillStyle = COLORS.sheet;
                 ctx.fillRect(x0, y0, w, h);
                 ctx.strokeStyle = COLORS.ink;
-                ctx.lineWidth = 1.6;
+                ctx.lineWidth = 1.6 * K * 0.8;
                 ctx.strokeRect(x0, y0, w, h);
-                ctx.lineWidth = 1;
-                ctx.strokeRect(x0, y0, w, 28);
+                ctx.lineWidth = 1 * K * 0.8;
+                ctx.strokeRect(x0, y0, w, hd);
                 if (LOGO_IMG && LOGO_IMG.complete && LOGO_IMG.naturalWidth > 0) {
                     try {
-                        ctx.drawImage(LOGO_IMG, x0 + 6, y0 + 4, 54, 20);
+                        ctx.drawImage(LOGO_IMG, x0 + 6 * K, y0 + 4 * K, 54 * K, 20 * K);
                     }
                     catch (e) { }
                 }
-                drawTextE(cart.titre || "TITRE DU CHANTIER", x0 + 64 + (w - 64) / 2, y0 + 18, 12, COLORS.ink, { weight: 800, baseline: "alphabetic" });
-                const colW = w / 2, rowH = 26;
+                drawTextE(cart.titre || "TITRE DU CHANTIER", x0 + 64 * K + (w - 64 * K) / 2, y0 + 18 * K, 12 * K, COLORS.ink, { weight: 800, baseline: "alphabetic" });
+                const colW = w / 2;
                 ctx.strokeStyle = COLORS.ink;
-                ctx.lineWidth = 0.7;
+                ctx.lineWidth = 0.7 * K * 0.8;
                 for (let r = 0; r < 4; r++) {
                     ctx.beginPath();
-                    ctx.moveTo(x0, y0 + 28 + r * rowH);
-                    ctx.lineTo(x0 + w, y0 + 28 + r * rowH);
+                    ctx.moveTo(x0, y0 + hd + r * rowH);
+                    ctx.lineTo(x0 + w, y0 + hd + r * rowH);
                     ctx.stroke();
                 }
                 ctx.beginPath();
-                ctx.moveTo(x0 + colW, y0 + 28);
-                ctx.lineTo(x0 + colW, y0 + 28 + 3 * rowH);
+                ctx.moveTo(x0 + colW, y0 + hd);
+                ctx.lineTo(x0 + colW, y0 + hd + 3 * rowH);
                 ctx.stroke();
                 const row = (label, val, cx0, cy0) => {
-                    drawTextE(label, cx0 + 4, cy0 + 9, 6.5, COLORS.cote, { weight: 700, align: "left", baseline: "alphabetic" });
-                    drawTextE(val || "—", cx0 + 4, cy0 + 20, 9.5, COLORS.ink, { mono: true, align: "left", baseline: "alphabetic" });
+                    drawTextE(label, cx0 + 4 * K, cy0 + 9 * K, 6.5 * K, COLORS.cote, { weight: 700, align: "left", baseline: "alphabetic" });
+                    drawTextE(val || "—", cx0 + 4 * K, cy0 + 20 * K, 9.5 * K, COLORS.ink, { mono: true, align: "left", baseline: "alphabetic" });
                 };
-                row("CLIENT", cart.client, x0, y0 + 28);
-                row("SITE", cart.site, x0 + colW, y0 + 28);
-                row("LOCAL", cart.local, x0, y0 + 28 + rowH);
-                row("TRANCHE", cart.tranche, x0 + colW, y0 + 28 + rowH);
-                row("MATIÈRE", cart.matiere, x0, y0 + 28 + 2 * rowH);
-                row("DN", cart.dn, x0 + colW, y0 + 28 + 2 * rowH);
-                row("LIGNE", cart.ligne, x0, y0 + 28 + 3 * rowH);
+                row("CLIENT", cart.client, x0, y0 + hd);
+                row("SITE", cart.site, x0 + colW, y0 + hd);
+                row("LOCAL", cart.local, x0, y0 + hd + rowH);
+                row("TRANCHE", cart.tranche, x0 + colW, y0 + hd + rowH);
+                row("MATIÈRE", cart.matiere, x0, y0 + hd + 2 * rowH);
+                row("DN", cart.dn, x0 + colW, y0 + hd + 2 * rowH);
+                row("LIGNE", cart.ligne, x0, y0 + hd + 3 * rowH);
             }
             // ---- repère XYZ ----
             (() => {
@@ -9445,31 +9633,17 @@ function IsoChantier() {
                 return;
             }
             if (mode === "pdf") {
-                const overlay = document.createElement("div");
-                overlay.id = "__pdf_print_overlay";
-                overlay.style.cssText = "position:fixed;inset:0;background:" + bgColorForExport + ";z-index:999999;display:flex;align-items:center;justify-content:center;";
-                const img = document.createElement("img");
-                img.src = dataUrl;
-                img.style.cssText = "max-width:100%;max-height:100%;";
-                overlay.appendChild(img);
-                const closeBtn = document.createElement("button");
-                closeBtn.textContent = "✕ Fermer";
-                closeBtn.style.cssText = "position:fixed;top:calc(12px + env(safe-area-inset-top));right:12px;z-index:1000000;padding:10px 16px;border-radius:999px;border:none;background:#282456;color:#fff;font-weight:700;font-family:sans-serif;font-size:14px;";
-                overlay.appendChild(closeBtn);
-                const prevDisplay = [];
-                Array.from(document.body.children).forEach((el) => {
-                    prevDisplay.push([el, el.style.display]);
-                    el.style.display = "none";
-                });
-                document.body.appendChild(overlay);
-                const cleanup = () => {
-                    overlay.remove();
-                    prevDisplay.forEach(([el, d]) => { el.style.display = d; });
-                    window.removeEventListener("afterprint", cleanup);
-                };
-                closeBtn.onclick = cleanup;
-                window.addEventListener("afterprint", cleanup);
-                setTimeout(() => { window.print(); }, 150);
+                // fond opaque pour le JPEG (le PDF n'a pas de transparence)
+                const cj = document.createElement("canvas");
+                cj.width = c.width;
+                cj.height = c.height;
+                const xj = cj.getContext("2d");
+                xj.fillStyle = "#FFFFFF";
+                xj.fillRect(0, 0, cj.width, cj.height);
+                xj.drawImage(c, 0, 0);
+                const pdfBlob = buildImagePdf(cj.toDataURL("image/jpeg", 0.92), cj.width, cj.height);
+                const pdfName = (cart.titre ? cart.titre.replace(/[^\w-]+/g, "_") : "iso-tuyauterie") + ".pdf";
+                saveBlobFile(pdfBlob, pdfName, null);
                 return;
             }
             const pngName = (cart.titre ? cart.titre.replace(/[^\w-]+/g, "_") : "iso-tuyauterie") + ".png";
@@ -9985,9 +10159,12 @@ function IsoChantier() {
         React.createElement("div", { style: { ...menuItem, cursor: "default" } },
             React.createElement("span", { style: { flex: 1 } }, "Fond"),
             iosSeg([["paper", "Blanc"], ["white", "Aucun"], ["blue", "Bleu"]], exportBg, (v) => setExportBg(v))),
+        React.createElement("div", { style: { ...menuItem, cursor: "default" } },
+            React.createElement("span", { style: { flex: 1 } }, "Nomenclature"),
+            iosSeg([[true, "Oui"], [false, "Non"]], exportBom, (v) => setExportBom(v))),
         React.createElement("div", { style: menuSep }),
         mItem("Exporter en PNG", "\u2B07\uFE0E", () => { closeMenusNow(); exportPng(); }, true),
-        mItem("Imprimer / PDF", "\u2399", () => { closeMenusNow(); exportPng("pdf"); }));
+        mItem("Exporter en PDF", "\u2399", () => { closeMenusNow(); exportPng("pdf"); }));
     const dimLayer = React.createElement("div", { className: "ios-dim" + (menuClosing ? " closing" : ""), onClick: closeMenusAnimated, style: { position: "fixed", inset: 0, zIndex: 29, background: "rgba(0,0,0,0.12)" } });
     // ---- fenêtre « Dimensions 3D » d'un appareil : cotes réelles en mm ----
     const appDimPopup = (() => {
