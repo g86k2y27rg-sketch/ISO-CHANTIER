@@ -5338,36 +5338,34 @@ function IsoChantier() {
         // étiquette DN (hors tracé) : le cadre se glisse librement, le point
         // d'accroche glisse le long de son tube
         if (mode !== "draw") {
-            for (const g of dnGroups) {
-                const lp = dnLabelPos(g.anchor);
-                if (Math.hypot(lp.x - pt.x, lp.y - pt.y) < 28) {
-                    snapshot();
-                    dragRef.current = { dnSeg: g.anchor.id };
+            // cadres d'étiquettes (DN, nom d'organe/soudure, nom de tronçon) :
+            // on retient le cadre le PLUS PROCHE du doigt (pas le premier
+            // trouvé), sinon deux étiquettes voisines se volent le toucher
+            let bestLbl = null, bestLblD = 28;
+            const tryLbl = (lp, ref) => {
+                if (!lp)
                     return;
+                const d = Math.hypot(lp.x - pt.x, lp.y - pt.y);
+                if (d < bestLblD) {
+                    bestLblD = d;
+                    bestLbl = ref;
                 }
-            }
-            // nom d'organe : cadre déplaçable
-            for (const f of fittings) {
-                if (!f.name || f.nameHidden)
-                    continue;
-                const lp = fitNameLabelPos(f);
-                if (lp && Math.hypot(lp.x - pt.x, lp.y - pt.y) < 28) {
-                    snapshot();
-                    dragRef.current = { fitName: f.id };
-                    return;
-                }
-            }
+            };
+            for (const g of dnGroups)
+                tryLbl(dnLabelPos(g.anchor), { dnSeg: g.anchor.id });
+            // nom d'organe / de soudure : cadre déplaçable
+            for (const f of fittings)
+                if (f.name && !f.nameHidden)
+                    tryLbl(fitNameLabelPos(f), { fitName: f.id });
             // étiquette de nom de tronçon : cadre libre, point d'accroche
             // glissant sur la longueur du tronçon
-            for (const s of segments) {
-                if (!s.name || s.nameHidden)
-                    continue;
-                const lp = nameLabelPos(s);
-                if (Math.hypot(lp.x - pt.x, lp.y - pt.y) < 28) {
-                    snapshot();
-                    dragRef.current = { nameSeg: s.id };
-                    return;
-                }
+            for (const s of segments)
+                if (s.name && !s.nameHidden)
+                    tryLbl(nameLabelPos(s), { nameSeg: s.id });
+            if (bestLbl) {
+                snapshot();
+                dragRef.current = bestLbl;
+                return;
             }
             for (const s of segments) {
                 if (!s.name || s.nameHidden)
@@ -5968,6 +5966,51 @@ function IsoChantier() {
             dragRef.current = null;
             tapRef.current = null;
             return;
+        }
+        // simple toucher (sans glisser) sur une étiquette DN / nom de tronçon /
+        // nom d'organe ou de soudure, en mode sélection : sélectionne l'élément
+        // porteur directement, sans devoir viser le tube ou l'organe
+        {
+            const dr = dragRef.current;
+            const lblSeg = dr && (dr.dnSeg || dr.nameSeg || (!dr.armed && (dr.dnAnchor || dr.nameAnchor)));
+            const lblFit = dr && dr.fitName;
+            if (mode === "select" && (lblSeg || lblFit) && tapRef.current && !tapRef.current.moved) {
+                dragRef.current = null;
+                tapRef.current = null;
+                if (lblFit) {
+                    const f = fittings.find((x) => x.id === lblFit);
+                    if (multi) {
+                        setMFits((m) => (m.includes(lblFit) ? m.filter((x) => x !== lblFit) : [...m, lblFit]));
+                        return;
+                    }
+                    if (f && f.gid) {
+                        collectGroup(f.gid);
+                        return;
+                    }
+                    clearMulti();
+                    setSelFit(lblFit);
+                    setSelSeg(null);
+                }
+                else {
+                    const s = segments.find((x) => x.id === lblSeg);
+                    if (multi) {
+                        setMSegs((m) => (m.includes(lblSeg) ? m.filter((x) => x !== lblSeg) : [...m, lblSeg]));
+                        return;
+                    }
+                    if (s && s.gid) {
+                        collectGroup(s.gid);
+                        return;
+                    }
+                    clearMulti();
+                    setSelSeg(lblSeg);
+                    setSelFit(null);
+                    setSelTri(null);
+                }
+                setSelElbow(null);
+                setSelDim(null);
+                setSelSegCote(null);
+                return;
+            }
         }
         if (dragRef.current && (dragRef.current.dnAnchor || dragRef.current.nameAnchor)) {
             const moved = dragRef.current.armed;
@@ -10684,15 +10727,15 @@ function IsoChantier() {
                     React.createElement("button", { style: cb, onClick: () => updateFit({ scl: Math.min(isStructSel ? 8 : 3, (selectedFitting.scl || 1) + (isStructSel ? 0.25 : 0.15)) }) }, "\u25B2"),
                     React.createElement("button", { style: cb, onClick: () => updateFit({ scl: Math.max(isStructSel ? 0.4 : 0.5, (selectedFitting.scl || 1) - (isStructSel ? 0.2 : 0.15)) }) }, "\u25BC"))),
                 React.createElement(ColorSwatch, { title: "Couleur", value: selectedFitting.color || (isStructSel ? COLORS.structure : isApp3(selectedFitting) ? APP_COL.stroke : COLORS.ink), onChange: (c) => updateFit({ color: c }) }),
-                fitNameable(selectedFitting) && React.createElement("button", { title: "Plus d'options (nom de l'organe)", style: { ...(fitMore ? cbOn : cb), flexShrink: 0 }, onClick: () => setFitMore(!fitMore) }, "\u22EF"),
+                fitNameable(selectedFitting) && !(selectedFitting.type === "soudure" || selectedFitting.type === "souduresw") && React.createElement("button", { title: "Plus d'options (nom de l'organe)", style: { ...(fitMore ? cbOn : cb), flexShrink: 0 }, onClick: () => setFitMore(!fitMore) }, "\u22EF"),
                 React.createElement("button", { title: "Dupliquer", "aria-label": "Dupliquer", style: { ...cb, marginLeft: "auto", fontSize: 20 }, onClick: () => duplicateSelection([], [selFit]) }, "+"),
                 React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: () => removeFitting(selFit), style: { ...cb, fontSize: 17, borderColor: "#B3341C", color: "#B3341C" } }, "\u2715")),
-            fitMore && fitNameable(selectedFitting) && React.createElement("div", { style: rowS },
+            (fitMore || (selectedFitting.type === "soudure" || selectedFitting.type === "souduresw")) && fitNameable(selectedFitting) && React.createElement("div", { style: rowS },
                 React.createElement("span", { style: labS }, "Nom"),
-                React.createElement(TextField, { placeholder: "Nom de l'organe", width: 160, value: selectedFitting.name || "", onInput: (e) => updateFit({ name: e.target.value || null }), hidden: !!selectedFitting.nameHidden, onToggleHidden: selectedFitting.name ? () => updateFit({ nameHidden: !selectedFitting.nameHidden }) : null }),
+                React.createElement(TextField, { placeholder: (selectedFitting.type === "soudure" || selectedFitting.type === "souduresw") ? "Nom de la soudure" : "Nom de l'organe", width: 160, value: selectedFitting.name || "", onInput: (e) => updateFit({ name: e.target.value || null }), hidden: !!selectedFitting.nameHidden, onToggleHidden: selectedFitting.name ? () => updateFit({ nameHidden: !selectedFitting.nameHidden }) : null }),
                 selectedFitting.name && React.createElement("button", { style: { ...cbx, fontSize: 12 }, title: "Texte plus petit", onClick: () => updateFit({ nameFs: Math.max(0.6, +((selectedFitting.nameFs || 1) - 0.15).toFixed(2)) }) }, "A\u2212"),
                 selectedFitting.name && React.createElement("button", { style: cbx, title: "Texte plus grand", onClick: () => updateFit({ nameFs: Math.min(3, +((selectedFitting.nameFs || 1) + 0.15).toFixed(2)) }) }, "A+")),
-            fitMore && fitNameable(selectedFitting) && selectedFitting.segId != null && React.createElement("div", { style: rowS },
+            fitMore && fitNameable(selectedFitting) && !(selectedFitting.type === "soudure" || selectedFitting.type === "souduresw") && selectedFitting.segId != null && React.createElement("div", { style: rowS },
                 React.createElement("span", { style: labS }, "Encombrement"),
                 React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "mm", width: 96, value: selectedFitting.enc || "", onInput: (e) => updateFit({ enc: e.target.value ? +e.target.value : null }) }),
                 React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, flexShrink: 0 } }, "face \u00E0 face \u00B7 rendu 3D")),
