@@ -554,7 +554,12 @@ const obliqueDimGeom = (P, Q, oz, flip, alt) => {
     const dA = { x: P.x + n.x * oz, y: P.y + n.y * oz };
     const dB = { x: Q.x + n.x * oz, y: Q.y + n.y * oz };
     const ang = (Math.atan2(u.y, u.x) * 180) / Math.PI;
-    return { u, n, dA, dB, ang, projLen: L };
+    // décalage du texte : perpendiculaire à la ligne de cote, du côté des
+    // lignes d'attache — texte centré sur la ligne, jamais décalé en biais
+    let tn = { x: -u.y, y: u.x };
+    if (tn.x * n.x + tn.y * n.y < 0)
+        tn = { x: -tn.x, y: -tn.y };
+    return { u, n, dA, dB, ang, projLen: L, ob: true, tn };
 };
 const dimAx = (d) => (d.axis != null ? d.axis : { ob: true });
 // ---- Appareils (bâche / échangeur / circulateur) dessinés en volume iso ----
@@ -1215,7 +1220,9 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
         const fittingOf = (id) => (fittings || []).find((x) => x.id === id);
         const segIdOfAnchor = (a) => (a && a.f) ? (fittingOf(a.f) || {}).segId : null;
         (freeDims || []).forEach((d) => {
-            if (!d.p1 || !d.p2 || d.value == null || d.axis == null)
+            // cotes le long d'un même tronçon : axe iso OU oblique (mesurée le
+            // long du tube incliné, ex. entre 2 brides d'une casse)
+            if (!d.p1 || !d.p2 || d.value == null)
                 return;
             const seg1 = segIdOfAnchor(d.p1), seg2 = segIdOfAnchor(d.p2);
             let segId = null;
@@ -1249,7 +1256,10 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
             // avec les vraies cotes, et les accessoires positionnés par cote
             // libre se retrouvent tous tassés en bout de tronçon (rang > 1
             // toujours écrêté à 1)
-            const fallbackTotalMM = legs.reduce((a, l) => a + l.len, 0);
+            // tube réel d'une casse = la diagonale (pas la somme des branches)
+            const fallbackTotalMM = (s.casse || s.doubleCasse)
+                ? (s.cote || (() => { const e = legs.reduce((c, l) => applyLeg(c, l.axis, l.sign, l.len), { x: 0, y: 0, z: 0 }); return Math.hypot(e.x, e.y, e.z) * 100; })())
+                : legs.reduce((a, l) => a + l.len, 0);
             const keyOf = (a) => {
                 if (a.n === s.a)
                     return "__A__";
@@ -2225,6 +2235,9 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
         else {
             halfLen = prLocal * (VOLUMETRIC_HALF_LEN[f.type] || 1);
         }
+        // cote d'encombrement saisie (face à face, mm) : prime sur la table
+        if (f.enc > 0)
+            halfLen = f.enc / 200;
         return { segId: f.segId, pos: gp, halfLen };
     }).filter(Boolean);
     // découpe un segment monde A->B pour EXCLURE les portions recouvertes par
@@ -3720,9 +3733,44 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
         const col = f.color || (f.type === "support" ? COLORS.accent : (VOLUMETRIC_FITTING_TYPES.includes(f.type) || APPLIANCE_METAL_TYPES.includes(f.type)) ? "#8A96A3" : COLORS.ink);
         const pairNode = bsEndNode(f);
         const pair = pairNode && flangedNozzles[pairNode] && resolved.posMap[pairNode];
-        const prims = pair
+        let prims = pair
             ? fittingPrimitives3D("bride", resolved.posMap[pairNode], flangedNozzles[pairNode].u, 1, 0, (s && s.dn) || flangedNozzles[pairNode].dn, col)
             : fittingPrimitives3D(f.type, pos, axis, sign, f.rot, s && s.dn, col, f.branchDn, f.bdir, f.shellDia, f.axis3d, f.shellLen, f.axOff);
+        // cote d'encombrement (face à face, mm) : l'organe est étiré/réduit
+        // le long du tube pour mesurer exactement cette longueur en 3D
+        if (f.enc > 0) {
+            const tv0 = pair ? flangedNozzles[pairNode].u : (typeof axis === "object" && axis ? axis : AXIS_VEC[axis]);
+            if (tv0) {
+                const tl = Math.hypot(tv0.x, tv0.y, tv0.z) || 1;
+                const tv = { x: tv0.x / tl, y: tv0.y / tl, z: tv0.z / tl };
+                const c0 = pair ? resolved.posMap[pairNode] : pos;
+                const ds = [];
+                const each = (fn) => prims.forEach((pr) => {
+                    if (pr.pts)
+                        pr.pts.forEach(fn);
+                    ["a", "b", "p"].forEach((k) => { if (pr[k] && pr[k].x != null) fn(pr[k]); });
+                });
+                each((q) => ds.push((q.x - c0.x) * tv.x + (q.y - c0.y) * tv.y + (q.z - c0.z) * tv.z));
+                if (ds.length) {
+                    const mn = Math.min(...ds), mx = Math.max(...ds), cur = mx - mn;
+                    if (cur > 1e-6) {
+                        const kk = (f.enc / 100) / cur, mid = (mn + mx) / 2;
+                        const sc = (q) => {
+                            const d = (q.x - c0.x) * tv.x + (q.y - c0.y) * tv.y + (q.z - c0.z) * tv.z;
+                            const dd = (d - mid) * (kk - 1);
+                            return { ...q, x: q.x + tv.x * dd, y: q.y + tv.y * dd, z: q.z + tv.z * dd };
+                        };
+                        prims = prims.map((pr) => {
+                            const np = { ...pr };
+                            if (pr.pts)
+                                np.pts = pr.pts.map(sc);
+                            ["a", "b", "p"].forEach((k) => { if (pr[k] && pr[k].x != null) np[k] = sc(pr[k]); });
+                            return np;
+                        });
+                    }
+                }
+            }
+        }
         const projPrims = prims.map((pr) => {
             if (pr.kind === "line")
                 return { kind: "line", a: screenPt(pr.a), b: screenPt(pr.b) };
@@ -7273,7 +7321,7 @@ function IsoChantier() {
             React.createElement("line", { x1: dA.x, y1: dA.y, x2: dB.x, y2: dB.y, stroke: color, "stroke-width": 0.9 * zl }),
             React.createElement(Arrow, { x: dA.x, y: dA.y, angle: ang + 180, color: color, sc: zl }),
             React.createElement(Arrow, { x: dB.x, y: dB.y, angle: ang, color: color, sc: zl }),
-            React.createElement("text", { transform: `translate(${(dA.x + dB.x) / 2 + n.x * fs(10) * zoom + (tOff ? tOff.x * zoom : 0)},${(dA.y + dB.y) / 2 + n.y * fs(10) * zoom + (tOff ? tOff.y * zoom : 0)}) rotate(${ta})`, "font-size": fs(11.5) * zoom, "font-family": "'IBM Plex Mono', monospace", "font-weight": 500, fill: color, "text-anchor": "middle", "dominant-baseline": "middle" }, value !== null && value !== void 0 ? value : "…")));
+            React.createElement("text", { transform: `translate(${(dA.x + dB.x) / 2 + (g.tn || n).x * fs(g.ob ? 8 : 10) * zoom + (tOff ? tOff.x * zoom : 0)},${(dA.y + dB.y) / 2 + (g.tn || n).y * fs(g.ob ? 8 : 10) * zoom + (tOff ? tOff.y * zoom : 0)}) rotate(${ta})`, "font-size": fs(11.5) * zoom, "font-family": "'IBM Plex Mono', monospace", "font-weight": 500, fill: color, "text-anchor": "middle", "dominant-baseline": "middle" }, value !== null && value !== void 0 ? value : "…")));
     };
     // Hachures de triangle : lignes parallèles fines remplissant l'intérieur,
     // comme sur les isométriques dessinés à la main
@@ -7440,8 +7488,8 @@ function IsoChantier() {
                             angB.toFixed(1).replace(".", ","),
                             "\u00B0")));
                 })(),
-                s.coteL1 && !s.coteL1Hidden && React.createElement(DimLine, { P: Atri, Q: C, value: s.coteL1, color: calcFocus === "casse-l1" ? COLORS.topbar : cc, off: 22, flip: s.coteL1Flip != null ? !!s.coteL1Flip : undefined, awayFrom: s.coteL1Flip == null ? Btri : null, alt: !!s.coteL1Alt }),
-                s.coteL2 && !s.coteL2Hidden && React.createElement(DimLine, { P: C, Q: Btri, value: s.coteL2, color: calcFocus === "casse-l2" ? COLORS.topbar : cc, off: 22, flip: s.coteL2Flip != null ? !!s.coteL2Flip : undefined, awayFrom: s.coteL2Flip == null ? Atri : null, alt: !!s.coteL2Alt })));
+                s.coteL1 && !s.coteL1Hidden && React.createElement(DimLine, { P: Atri, Q: C, value: s.coteL1, color: calcFocus === "casse-l1" ? COLORS.topbar : cc, off: 22 + (s.coteL1Off || 0), flip: s.coteL1Flip != null ? !!s.coteL1Flip : undefined, awayFrom: s.coteL1Flip == null ? Btri : null, alt: !!s.coteL1Alt }),
+                s.coteL2 && !s.coteL2Hidden && React.createElement(DimLine, { P: C, Q: Btri, value: s.coteL2, color: calcFocus === "casse-l2" ? COLORS.topbar : cc, off: 22 + (s.coteL2Off || 0), flip: s.coteL2Flip != null ? !!s.coteL2Flip : undefined, awayFrom: s.coteL2Flip == null ? Atri : null, alt: !!s.coteL2Alt })));
         }
         let doubleCasseEls = null;
         if (s.doubleCasse) {
@@ -7491,8 +7539,8 @@ function IsoChantier() {
                                 angB.toFixed(1).replace(".", ","),
                                 "\u00B0")));
                     })(),
-                    triData.coteL1 && !triData.l1Hidden && React.createElement(DimLine, { P: Atri, Q: C, value: triData.coteL1, color: hlL1 ? COLORS.topbar : cc, off: 22, flip: triData.l1Flip != null ? !!triData.l1Flip : undefined, awayFrom: triData.l1Flip == null ? Btri : null, alt: !!triData.l1Alt }),
-                    triData.coteL2 && !triData.l2Hidden && React.createElement(DimLine, { P: C, Q: Btri, value: triData.coteL2, color: hlL2 ? COLORS.topbar : cc, off: 22, flip: triData.l2Flip != null ? !!triData.l2Flip : undefined, awayFrom: triData.l2Flip == null ? Atri : null, alt: !!triData.l2Alt })));
+                    triData.coteL1 && !triData.l1Hidden && React.createElement(DimLine, { P: Atri, Q: C, value: triData.coteL1, color: hlL1 ? COLORS.topbar : cc, off: 22 + (triData.l1Off || 0), flip: triData.l1Flip != null ? !!triData.l1Flip : undefined, awayFrom: triData.l1Flip == null ? Btri : null, alt: !!triData.l1Alt }),
+                    triData.coteL2 && !triData.l2Hidden && React.createElement(DimLine, { P: C, Q: Btri, value: triData.coteL2, color: hlL2 ? COLORS.topbar : cc, off: 22 + (triData.l2Off || 0), flip: triData.l2Flip != null ? !!triData.l2Flip : undefined, awayFrom: triData.l2Flip == null ? Atri : null, alt: !!triData.l2Alt })));
             };
             doubleCasseEls = (React.createElement("g", null,
                 renderDcTri(s.doubleCasse.tri1, A0, midS, 1),
@@ -7626,7 +7674,7 @@ function IsoChantier() {
     const renderDnLabels = () => dnGroups.map((g, i) => {
         const lp = dnLabelPos(g.anchor);
         const sel = g.anchor.id === selSeg || mSegs.includes(g.anchor.id);
-        return leaderLabel("dn" + i, lp, "DN" + g.dn, sel ? COLORS.accent : COLORS.ink, g.anchor.id, 0.68);
+        return leaderLabel("dn" + i, lp, "DN" + g.dn, sel ? COLORS.accent : COLORS.ink, g.anchor.id, 0.68, g.anchor.dnFs);
     });
     const nameLabelPos = (s) => {
         var _a, _b;
@@ -7644,6 +7692,46 @@ function IsoChantier() {
     // points où le trait de rappel d'un nom de tronçon croise un autre tube
     // ou la ligne de cote d'un tube — sert à y insérer une coupure visuelle,
     // comme au croisement de deux tubes entre eux
+    // lignes des cotes B1/B2 des triangles de casse (simple et double), même
+    // géométrie que leur dessin — pour couper les traits de rappel devant elles
+    const casseDimLines = (s, P, zv, dimG) => {
+        const out = [];
+        const pick = (A, B, off, flipV, away, alt) => {
+            let g = dimG(A, B, off, flipV != null ? !!flipV : false, alt);
+            if (flipV == null && away) {
+                const g2 = dimG(A, B, off, true, alt);
+                const m1 = { x: (g.dA.x + g.dB.x) / 2, y: (g.dA.y + g.dB.y) / 2 };
+                const m2 = { x: (g2.dA.x + g2.dB.x) / 2, y: (g2.dA.y + g2.dB.y) / 2 };
+                if (Math.hypot(m2.x - away.x, m2.y - away.y) > Math.hypot(m1.x - away.x, m1.y - away.y))
+                    g = g2;
+            }
+            out.push([g.dA, g.dB], [A, g.dA], [B, g.dB]);
+        };
+        const tri = (t, endA, endB, l1, l2, l1H, l2H, f1, f2, a1, a2, o1, o2) => {
+            const ofs = (o) => o || { x: 0, y: 0 };
+            const c0 = P(t.corner);
+            const Atri = { x: endA.x + ofs(t.triA).x * zv, y: endA.y + ofs(t.triA).y * zv };
+            const Btri = { x: endB.x + ofs(t.triB).x * zv, y: endB.y + ofs(t.triB).y * zv };
+            const C = { x: c0.x + ofs(t.triC).x * zv, y: c0.y + ofs(t.triC).y * zv };
+            if (l1 && !l1H)
+                pick(Atri, C, 22 + (o1 || 0), f1, Btri, a1);
+            if (l2 && !l2H)
+                pick(C, Btri, 22 + (o2 || 0), f2, Atri, a2);
+        };
+        if (!nodes[s.a] || !nodes[s.b])
+            return out;
+        const A0 = P(nodes[s.a]), B0 = P(nodes[s.b]);
+        if (s.casse && s.casse.corner)
+            tri(s.casse, A0, B0, s.coteL1, s.coteL2, s.coteL1Hidden, s.coteL2Hidden, s.coteL1Flip, s.coteL2Flip, !!s.coteL1Alt, !!s.coteL2Alt, s.coteL1Off, s.coteL2Off);
+        if (s.doubleCasse) {
+            const midS = P(s.doubleCasse.mid);
+            [[s.doubleCasse.tri1, A0, midS], [s.doubleCasse.tri2, midS, B0]].forEach(([t, ea, eb]) => {
+                if (t && t.corner && !t.noTri)
+                    tri(t, ea, eb, t.coteL1, t.coteL2, t.l1Hidden, t.l2Hidden, t.l1Flip, t.l2Flip, !!t.l1Alt, !!t.l2Alt, t.l1Off, t.l2Off);
+            });
+        }
+        return out;
+    };
     const leaderGapPoints = (P, Q, excludeId) => {
         const pts = [];
         const add = (A, B) => {
@@ -7664,6 +7752,7 @@ function IsoChantier() {
                 add(oA, g.dA);
                 add(oB, g.dB);
             }
+            casseDimLines(o, proj, zoom, dimGeometry).forEach(([a, b]) => add(a, b));
         });
         (freeDims || []).forEach((d) => {
             if (d.hidden)
@@ -7680,8 +7769,8 @@ function IsoChantier() {
     };
     // étiquette à trait de rappel (nom de tronçon, DN, nom d'organe) : le
     // trait est coupé là où il passe devant un tube ou une cote
-    const leaderLabel = (key, lp, txt, cc, excludeId, wk) => {
-        const fw = fs(11) * zoom;
+    const leaderLabel = (key, lp, txt, cc, excludeId, wk, tk) => {
+        const fw = fs(11) * (tk || 1) * zoom;
         const w = (txt.length * (wk || 0.62) + 1.2) * fw;
         const h = 1.75 * fw;
         const vx = lp.mid.x - lp.x, vy = lp.mid.y - lp.y;
@@ -7723,12 +7812,12 @@ function IsoChantier() {
         if (!lp)
             return null;
         const sel = f.id === selFit || mFits.includes(f.id);
-        return leaderLabel("fn" + f.id, lp, f.name, sel ? COLORS.accent : COLORS.topbar, f.segId);
+        return leaderLabel("fn" + f.id, lp, f.name, sel ? COLORS.accent : COLORS.topbar, f.segId, 0.62, f.nameFs);
     });
     const renderNameLabels = () => segments.filter((s) => s.name && !s.nameHidden).map((s) => {
         const lp = nameLabelPos(s);
         const sel = s.id === selSeg || mSegs.includes(s.id);
-        return leaderLabel("name" + s.id, lp, s.name, sel ? COLORS.accent : COLORS.topbar, s.id);
+        return leaderLabel("name" + s.id, lp, s.name, sel ? COLORS.accent : COLORS.topbar, s.id, 0.62, s.nameFs);
     });
     const renderPending = () => {
         if (!pendingPt || mode !== "cote")
@@ -8198,8 +8287,9 @@ function IsoChantier() {
                 ctx.stroke();
                 drawArrowE(dA.x, dA.y, ang + 180, color, zl);
                 drawArrowE(dB.x, dB.y, ang, color, zl);
-                const tx = (dA.x + dB.x) / 2 + n.x * fs(10) * rv.zoom + (tOff ? tOff.x * rv.zoom : 0);
-                const ty = (dA.y + dB.y) / 2 + n.y * fs(10) * rv.zoom + (tOff ? tOff.y * rv.zoom : 0);
+                const tnv = g.tn || n, tk = g.ob ? 8 : 10;
+                const tx = (dA.x + dB.x) / 2 + tnv.x * fs(tk) * rv.zoom + (tOff ? tOff.x * rv.zoom : 0);
+                const ty = (dA.y + dB.y) / 2 + tnv.y * fs(tk) * rv.zoom + (tOff ? tOff.y * rv.zoom : 0);
                 drawTextE(value !== null && value !== void 0 ? value : "…", tx, ty, fs(11.5) * rv.zoom, color, { rotate: ta, mono: true, weight: 500 });
             };
             const drawTriHatchE = (A, B, C, color, flip) => {
@@ -8360,9 +8450,9 @@ function IsoChantier() {
                         drawTextE("casse", (Atri.x + C.x + Btri.x) / 3, (Atri.y + C.y + Btri.y) / 3, fs(9.5) * rv.zoom, COLORS.casse, { mono: true });
                     }
                     if (s.coteL1 && !s.coteL1Hidden)
-                        drawDimE(Atri, C, s.coteL1, cc, 22, s.coteL1Flip != null ? !!s.coteL1Flip : false, null, s.coteL1Flip == null ? Btri : null, !!s.coteL1Alt);
+                        drawDimE(Atri, C, s.coteL1, cc, 22 + (s.coteL1Off || 0), s.coteL1Flip != null ? !!s.coteL1Flip : false, null, s.coteL1Flip == null ? Btri : null, !!s.coteL1Alt);
                     if (s.coteL2 && !s.coteL2Hidden)
-                        drawDimE(C, Btri, s.coteL2, cc, 22, s.coteL2Flip != null ? !!s.coteL2Flip : false, null, s.coteL2Flip == null ? Atri : null, !!s.coteL2Alt);
+                        drawDimE(C, Btri, s.coteL2, cc, 22 + (s.coteL2Off || 0), s.coteL2Flip != null ? !!s.coteL2Flip : false, null, s.coteL2Flip == null ? Atri : null, !!s.coteL2Alt);
                 }
                 if (s.doubleCasse) {
                     const midSE = projE(s.doubleCasse.mid);
@@ -8384,9 +8474,9 @@ function IsoChantier() {
                         ctx.stroke();
                         drawTriHatchE(Atri, C, Btri, COLORS.casse, !!triData.hflip);
                         if (triData.coteL1 && !triData.l1Hidden)
-                            drawDimE(Atri, C, triData.coteL1, cc, 22, triData.l1Flip != null ? !!triData.l1Flip : false, null, triData.l1Flip == null ? Btri : null, !!triData.l1Alt);
+                            drawDimE(Atri, C, triData.coteL1, cc, 22 + (triData.l1Off || 0), triData.l1Flip != null ? !!triData.l1Flip : false, null, triData.l1Flip == null ? Btri : null, !!triData.l1Alt);
                         if (triData.coteL2 && !triData.l2Hidden)
-                            drawDimE(C, Btri, triData.coteL2, cc, 22, triData.l2Flip != null ? !!triData.l2Flip : false, null, triData.l2Flip == null ? Atri : null, !!triData.l2Alt);
+                            drawDimE(C, Btri, triData.coteL2, cc, 22 + (triData.l2Off || 0), triData.l2Flip != null ? !!triData.l2Flip : false, null, triData.l2Flip == null ? Atri : null, !!triData.l2Alt);
                     };
                     drawDcTriE(s.doubleCasse.tri1, A0, midSE);
                     drawDcTriE(s.doubleCasse.tri2, midSE, B0);
@@ -9143,6 +9233,7 @@ function IsoChantier() {
                         add(oA, g.dA);
                         add(oB, g.dB);
                     }
+                    casseDimLines(o, projE, rv.zoom, dimGeometryE).forEach(([a, b]) => add(a, b));
                 });
                 (freeDims || []).forEach((d) => {
                     if (d.hidden)
@@ -9157,8 +9248,8 @@ function IsoChantier() {
                 });
                 return pts;
             };
-            const drawLeaderLabelE = (lp, txt, cc, excludeId, wk) => {
-                const fw = fs(11) * rv.zoom;
+            const drawLeaderLabelE = (lp, txt, cc, excludeId, wk, tk) => {
+                const fw = fs(11) * (tk || 1) * rv.zoom;
                 const w = (txt.length * (wk || 0.62) + 1.2) * fw;
                 const h = 1.75 * fw;
                 const vx = lp.mid.x - lp.x, vy = lp.mid.y - lp.y;
@@ -9203,7 +9294,7 @@ function IsoChantier() {
                 drawTextE(txt, lp.x, lp.y, fw, cc, { mono: true, weight: 600 });
             };
             for (const g of dnGroups)
-                drawLeaderLabelE(dnLabelPosE(g.anchor), "DN" + g.dn, COLORS.ink, g.anchor.id, 0.68);
+                drawLeaderLabelE(dnLabelPosE(g.anchor), "DN" + g.dn, COLORS.ink, g.anchor.id, 0.68, g.anchor.dnFs);
             const nameLabelPosE = (s) => {
                 var _a, _b;
                 const A = projE(nodes[s.a]), B = projE(nodes[s.b]);
@@ -9215,7 +9306,7 @@ function IsoChantier() {
             for (const s of segments) {
                 if (!s.name || s.nameHidden)
                     continue;
-                drawLeaderLabelE(nameLabelPosE(s), s.name, COLORS.topbar, s.id);
+                drawLeaderLabelE(nameLabelPosE(s), s.name, COLORS.topbar, s.id, 0.62, s.nameFs);
             }
             for (const f of fittings) {
                 if (!f.name || f.nameHidden)
@@ -9223,7 +9314,7 @@ function IsoChantier() {
                 const p = fittingScreenE(f);
                 if (!p)
                     continue;
-                drawLeaderLabelE({ mid: { x: p.x, y: p.y }, x: p.x + (f.fnlx != null ? f.fnlx : 44) * rv.zoom, y: p.y + (f.fnly != null ? f.fnly : -40) * rv.zoom }, f.name, COLORS.topbar, f.segId);
+                drawLeaderLabelE({ mid: { x: p.x, y: p.y }, x: p.x + (f.fnlx != null ? f.fnlx : 44) * rv.zoom, y: p.y + (f.fnly != null ? f.fnly : -40) * rv.zoom }, f.name, COLORS.topbar, f.segId, 0.62, f.nameFs);
             }
             // ---- nomenclature ----
             let nomBox = null;
@@ -10421,7 +10512,13 @@ function IsoChantier() {
                 React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: () => removeFitting(selFit), style: { ...cb, fontSize: 17, borderColor: "#B3341C", color: "#B3341C" } }, "\u2715")),
             fitMore && fitNameable(selectedFitting) && React.createElement("div", { style: rowS },
                 React.createElement("span", { style: labS }, "Nom"),
-                React.createElement(TextField, { placeholder: "Nom de l'organe", width: 190, value: selectedFitting.name || "", onInput: (e) => updateFit({ name: e.target.value || null }), hidden: !!selectedFitting.nameHidden, onToggleHidden: selectedFitting.name ? () => updateFit({ nameHidden: !selectedFitting.nameHidden }) : null })),
+                React.createElement(TextField, { placeholder: "Nom de l'organe", width: 160, value: selectedFitting.name || "", onInput: (e) => updateFit({ name: e.target.value || null }), hidden: !!selectedFitting.nameHidden, onToggleHidden: selectedFitting.name ? () => updateFit({ nameHidden: !selectedFitting.nameHidden }) : null }),
+                selectedFitting.name && React.createElement("button", { style: { ...cbx, fontSize: 12 }, title: "Texte plus petit", onClick: () => updateFit({ nameFs: Math.max(0.6, +((selectedFitting.nameFs || 1) - 0.15).toFixed(2)) }) }, "A\u2212"),
+                selectedFitting.name && React.createElement("button", { style: cbx, title: "Texte plus grand", onClick: () => updateFit({ nameFs: Math.min(3, +((selectedFitting.nameFs || 1) + 0.15).toFixed(2)) }) }, "A+")),
+            fitMore && fitNameable(selectedFitting) && selectedFitting.segId != null && React.createElement("div", { style: rowS },
+                React.createElement("span", { style: labS }, "Encombrement"),
+                React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "mm", width: 96, value: selectedFitting.enc || "", onInput: (e) => updateFit({ enc: e.target.value ? +e.target.value : null }) }),
+                React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, flexShrink: 0 } }, "face \u00E0 face \u00B7 rendu 3D")),
             selectedFitting.type === "teoduit" && (React.createElement("div", { style: rowS },
                 React.createElement("span", { style: labS }, "DN piquage"),
                 React.createElement("select", { value: selectedFitting.branchDn || "", onInput: (e) => updateFit({ branchDn: e.target.value ? +e.target.value : null }), style: { padding: "8px 10px", borderRadius: 8, border: `1.4px solid ${COLORS.ink}`, fontSize: 16, background: "#fff" } },
@@ -10580,7 +10677,23 @@ function IsoChantier() {
                     React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "Raccourcir", onClick: () => stretchSeg(-1) }, "\u2212"))),
             segMore && React.createElement("div", { style: rowS },
                 React.createElement("span", { style: labS }, "Nom"),
-                React.createElement(TextField, { placeholder: "Nom tron\u00E7on", width: 180, value: seg.name || "", onInput: (e) => updateSeg({ name: e.target.value || null }), hidden: !!seg.nameHidden, onToggleHidden: seg.name ? () => updateSeg({ nameHidden: !seg.nameHidden }) : null })),
+                React.createElement(TextField, { placeholder: "Nom tron\u00E7on", width: 160, value: seg.name || "", onInput: (e) => updateSeg({ name: e.target.value || null }), hidden: !!seg.nameHidden, onToggleHidden: seg.name ? () => updateSeg({ nameHidden: !seg.nameHidden }) : null }),
+                seg.name && React.createElement("button", { style: { ...cbx, fontSize: 12 }, title: "Texte plus petit", onClick: () => updateSeg({ nameFs: Math.max(0.6, +((seg.nameFs || 1) - 0.15).toFixed(2)) }) }, "A\u2212"),
+                seg.name && React.createElement("button", { style: cbx, title: "Texte plus grand", onClick: () => updateSeg({ nameFs: Math.min(3, +((seg.nameFs || 1) + 0.15).toFixed(2)) }) }, "A+")),
+            segMore && seg.dn && React.createElement("div", { style: rowS },
+                React.createElement("span", { style: labS }, "\u00C9tiquette DN"),
+                (() => {
+                    const grp = dnGroups.find((g) => g.segs.includes(seg.id));
+                    const cur = grp ? (grp.anchor.dnFs || 1) : (seg.dnFs || 1);
+                    const setFs = (v) => {
+                        snapshot();
+                        const ids = new Set(grp ? grp.segs : [seg.id]);
+                        setSegments((ss) => ss.map((x) => (ids.has(x.id) ? { ...x, dnFs: v } : x)));
+                    };
+                    return React.createElement(React.Fragment, null,
+                        React.createElement("button", { style: { ...cbx, fontSize: 12 }, title: "Texte plus petit", onClick: () => setFs(Math.max(0.6, +(cur - 0.15).toFixed(2))) }, "A\u2212"),
+                        React.createElement("button", { style: cbx, title: "Texte plus grand", onClick: () => setFs(Math.min(3, +(cur + 0.15).toFixed(2))) }, "A+"));
+                })()),
             (() => {
                 const P = nodes[seg.a], Q = nodes[seg.b];
                 if (!segMore || !P || !Q || seg.casse)
@@ -10681,12 +10794,17 @@ function IsoChantier() {
                 React.createElement("div", { style: rowS },
                 React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "B1", width: 92, focusKey: "casse-l1", value: seg.coteL1 || "", onInput: (e) => updateSeg({ coteL1: e.target.value ? +e.target.value : null }), hidden: !!seg.coteL1Hidden, onToggleHidden: seg.coteL1 != null ? () => updateSeg({ coteL1Hidden: !seg.coteL1Hidden }) : null }),
                 seg.coteL1 != null && (React.createElement(React.Fragment, null,
-                    React.createElement("button", { style: chip, onClick: () => updateSeg({ coteL1Flip: !seg.coteL1Flip }) }, "\u21C4"),
-                    React.createElement("button", { style: chip, onClick: () => updateSeg({ coteL1Alt: !seg.coteL1Alt }) }, "\u2195"))),
+                    React.createElement("button", { style: cbx, title: "Changer de c\u00F4t\u00E9", onClick: () => updateSeg({ coteL1Flip: !seg.coteL1Flip }) }, "\u21C4"),
+                    React.createElement("button", { style: cbx, title: "Autre ligne d'attache", onClick: () => updateSeg({ coteL1Alt: !seg.coteL1Alt }) }, "\u2195"),
+                    React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "Rapprocher", onClick: () => updateSeg({ coteL1Off: Math.max(-16, (seg.coteL1Off || 0) - 8) }) }, "\u2212"),
+                    React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "\u00C9loigner", onClick: () => updateSeg({ coteL1Off: Math.min(120, (seg.coteL1Off || 0) + 8) }) }, "+")))),
+                React.createElement("div", { style: rowS },
                 React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "B2", width: 92, focusKey: "casse-l2", value: seg.coteL2 || "", onInput: (e) => updateSeg({ coteL2: e.target.value ? +e.target.value : null }), hidden: !!seg.coteL2Hidden, onToggleHidden: seg.coteL2 != null ? () => updateSeg({ coteL2Hidden: !seg.coteL2Hidden }) : null }),
                 seg.coteL2 != null && (React.createElement(React.Fragment, null,
-                    React.createElement("button", { style: chip, onClick: () => updateSeg({ coteL2Flip: !seg.coteL2Flip }) }, "\u21C4"),
-                    React.createElement("button", { style: chip, onClick: () => updateSeg({ coteL2Alt: !seg.coteL2Alt }) }, "\u2195"))),
+                    React.createElement("button", { style: cbx, title: "Changer de c\u00F4t\u00E9", onClick: () => updateSeg({ coteL2Flip: !seg.coteL2Flip }) }, "\u21C4"),
+                    React.createElement("button", { style: cbx, title: "Autre ligne d'attache", onClick: () => updateSeg({ coteL2Alt: !seg.coteL2Alt }) }, "\u2195"),
+                    React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "Rapprocher", onClick: () => updateSeg({ coteL2Off: Math.max(-16, (seg.coteL2Off || 0) - 8) }) }, "\u2212"),
+                    React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "\u00C9loigner", onClick: () => updateSeg({ coteL2Off: Math.min(120, (seg.coteL2Off || 0) + 8) }) }, "+"))),
                 ),
                 seg.coteL1 && seg.coteL2 ? (React.createElement("span", { style: {
                         fontSize: 12, color: COLORS.ink, fontWeight: 700,
@@ -10719,12 +10837,17 @@ function IsoChantier() {
                         React.createElement("div", { style: rowS },
                         React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "B1", width: 92, focusKey: "dc-l1", value: triData.coteL1 || "", onInput: (e) => updateTri({ coteL1: e.target.value ? +e.target.value : null }), hidden: !!triData.l1Hidden, onToggleHidden: triData.coteL1 != null ? () => updateTri({ l1Hidden: !triData.l1Hidden }) : null }),
                         triData.coteL1 != null && (React.createElement(React.Fragment, null,
-                            React.createElement("button", { style: chip, onClick: () => updateTri({ l1Flip: !triData.l1Flip }) }, "\u21C4"),
-                            React.createElement("button", { style: chip, onClick: () => updateTri({ l1Alt: !triData.l1Alt }) }, "\u2195"))),
+                            React.createElement("button", { style: cbx, title: "Changer de c\u00F4t\u00E9", onClick: () => updateTri({ l1Flip: !triData.l1Flip }) }, "\u21C4"),
+                            React.createElement("button", { style: cbx, title: "Autre ligne d'attache", onClick: () => updateTri({ l1Alt: !triData.l1Alt }) }, "\u2195"),
+                            React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "Rapprocher", onClick: () => updateTri({ l1Off: Math.max(-16, (triData.l1Off || 0) - 8) }) }, "\u2212"),
+                            React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "\u00C9loigner", onClick: () => updateTri({ l1Off: Math.min(120, (triData.l1Off || 0) + 8) }) }, "+")))),
+                        React.createElement("div", { style: rowS },
                         React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "B2", width: 92, focusKey: "dc-l2", value: triData.coteL2 || "", onInput: (e) => updateTri({ coteL2: e.target.value ? +e.target.value : null }), hidden: !!triData.l2Hidden, onToggleHidden: triData.coteL2 != null ? () => updateTri({ l2Hidden: !triData.l2Hidden }) : null }),
                         triData.coteL2 != null && (React.createElement(React.Fragment, null,
-                            React.createElement("button", { style: chip, onClick: () => updateTri({ l2Flip: !triData.l2Flip }) }, "\u21C4"),
-                            React.createElement("button", { style: chip, onClick: () => updateTri({ l2Alt: !triData.l2Alt }) }, "\u2195"))),
+                            React.createElement("button", { style: cbx, title: "Changer de c\u00F4t\u00E9", onClick: () => updateTri({ l2Flip: !triData.l2Flip }) }, "\u21C4"),
+                            React.createElement("button", { style: cbx, title: "Autre ligne d'attache", onClick: () => updateTri({ l2Alt: !triData.l2Alt }) }, "\u2195"),
+                            React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "Rapprocher", onClick: () => updateTri({ l2Off: Math.max(-16, (triData.l2Off || 0) - 8) }) }, "\u2212"),
+                            React.createElement("button", { style: { ...cbx, fontSize: 18 }, title: "\u00C9loigner", onClick: () => updateTri({ l2Off: Math.min(120, (triData.l2Off || 0) + 8) }) }, "+"))),
                         ),
                         triData.coteL1 && triData.coteL2 ? (React.createElement("span", { style: {
                                 fontSize: 12, color: COLORS.ink, fontWeight: 700,
