@@ -537,6 +537,26 @@ const flangeBarScreen = (p0, p1, d, h) => [
     { x: p0.x - d.x * h, y: p0.y - d.y * h }, { x: p0.x + d.x * h, y: p0.y + d.y * h },
     { x: p1.x + d.x * h, y: p1.y + d.y * h }, { x: p1.x - d.x * h, y: p1.y - d.y * h },
 ];
+// cote libre OBLIQUE (entre deux points d'un tube incliné, ex. une casse) :
+// ligne de cote parallèle au tube, lignes d'attache suivant un axe iso
+// (Z par défaut, ↕ pour l'autre axe possible) — logique ISO respectée
+const obliqueDimGeom = (P, Q, oz, flip, alt) => {
+    const L = Math.hypot(Q.x - P.x, Q.y - P.y) || 1;
+    const u = { x: (Q.x - P.x) / L, y: (Q.y - P.y) / L };
+    const cands = [2, 0, 1].map((i) => ({ i, e: ISO_SCREEN_AXES[i] }))
+        .filter((o) => Math.abs(o.e.x * u.x + o.e.y * u.y) < 0.98);
+    const e = (alt && cands[1] ? cands[1] : cands[0]).e;
+    let n = { x: e.x, y: e.y };
+    if (n.y > 0)
+        n = { x: -n.x, y: -n.y };
+    if (flip)
+        n = { x: -n.x, y: -n.y };
+    const dA = { x: P.x + n.x * oz, y: P.y + n.y * oz };
+    const dB = { x: Q.x + n.x * oz, y: Q.y + n.y * oz };
+    const ang = (Math.atan2(u.y, u.x) * 180) / Math.PI;
+    return { u, n, dA, dB, ang, projLen: L };
+};
+const dimAx = (d) => (d.axis != null ? d.axis : { ob: true });
 // ---- Appareils (bâche / échangeur / circulateur) dessinés en volume iso ----
 // Corps cylindrique centré sur un point de grille (p3), couché suivant X/Y ou
 // debout suivant Z, rayon (gR) et longueur (gL) en unités de grille réglables
@@ -4281,6 +4301,7 @@ function IsoChantier() {
     const [selFit, setSelFit] = useState(null);
     const [selNoz, setSelNoz] = useState(null); // piquage sélectionné (appareil)
     const [segMore, setSegMore] = useState(false); // options avancées du tronçon dépliées
+    const [fitMore, setFitMore] = useState(false); // options avancées de l'organe (nom)
     const [appDimOpen, setAppDimOpen] = useState(false); // fenêtre « Dimensions 3D » d'un appareil
     const [nozPop, setNozPop] = useState(false); // fenêtre de réglage du piquage sélectionné
     const nozAnchorRef = useRef(null); // position d'ouverture de cette fenêtre (bouton touché)
@@ -4970,6 +4991,8 @@ function IsoChantier() {
     };
     // géométrie d'une cote alignée sur un axe iso
     const axisDimGeometry = (P, Q, axisIdx, off, flip, alt) => {
+        if (axisIdx && typeof axisIdx === "object")
+            return obliqueDimGeom(P, Q, off * zoom, flip, alt);
         const u = ISO_SCREEN_AXES[axisIdx];
         // lignes d'attache le long d'un des deux autres axes iso — les 2 sont
         // mathématiquement à équidistance parfaite de u (produit scalaire 0,5
@@ -5070,7 +5093,7 @@ function IsoChantier() {
         const P = resolvePoint(d.p1), Q = resolvePoint(d.p2);
         if (!P || !Q)
             return null;
-        const g = axisDimGeometry(P, Q, d.axis, d.off, d.flip);
+        const g = axisDimGeometry(P, Q, dimAx(d), d.off, d.flip, d.extAlt);
         return {
             x: (g.dA.x + g.dB.x) / 2 + g.n.x * fs(10) * zoom + (d.tox || 0) * zoom,
             y: (g.dA.y + g.dB.y) / 2 + g.n.y * fs(10) * zoom + (d.toy || 0) * zoom,
@@ -5166,6 +5189,17 @@ function IsoChantier() {
                 if (Math.hypot(lp.x - pt.x, lp.y - pt.y) < 28) {
                     snapshot();
                     dragRef.current = { dnSeg: g.anchor.id };
+                    return;
+                }
+            }
+            // nom d'organe : cadre déplaçable
+            for (const f of fittings) {
+                if (!f.name || f.nameHidden)
+                    continue;
+                const lp = fitNameLabelPos(f);
+                if (lp && Math.hypot(lp.x - pt.x, lp.y - pt.y) < 28) {
+                    snapshot();
+                    dragRef.current = { fitName: f.id };
                     return;
                 }
             }
@@ -5519,6 +5553,14 @@ function IsoChantier() {
             }
             return;
         }
+        if (dragRef.current && dragRef.current.fitName) {
+            const dx = (pt.x - t.lx) / zoom, dy = (pt.y - t.ly) / zoom;
+            const id = dragRef.current.fitName;
+            setFittings((ff) => ff.map((f) => (f.id === id ? { ...f, fnlx: (f.fnlx != null ? f.fnlx : 44) + dx, fnly: (f.fnly != null ? f.fnly : -40) + dy } : f)));
+            t.lx = pt.x;
+            t.ly = pt.y;
+            return;
+        }
         if (dragRef.current && dragRef.current.nameAnchor) {
             const dr = dragRef.current;
             if (!dr.armed) {
@@ -5781,7 +5823,7 @@ function IsoChantier() {
                 return;
             }
         }
-        if (dragRef.current && (dragRef.current.textSeg || dragRef.current.textDim || dragRef.current.dnSeg || dragRef.current.nameSeg || dragRef.current.triHandle || dragRef.current.boxHandle)) {
+        if (dragRef.current && (dragRef.current.textSeg || dragRef.current.textDim || dragRef.current.dnSeg || dragRef.current.nameSeg || dragRef.current.fitName || dragRef.current.triHandle || dragRef.current.boxHandle)) {
             dragRef.current = null;
             tapRef.current = null;
             return;
@@ -6300,7 +6342,7 @@ function IsoChantier() {
                 // aussi la ligne de cote elle-même
                 const P = resolvePoint(d.p1), Q = resolvePoint(d.p2);
                 if (P && Q) {
-                    const g = axisDimGeometry(P, Q, d.axis, d.off, d.flip);
+                    const g = axisDimGeometry(P, Q, dimAx(d), d.off, d.flip, d.extAlt);
                     const dl = distToSeg(pt, g.dA, g.dB).d;
                     if (dl < bdD) {
                         bdD = dl;
@@ -6614,7 +6656,7 @@ function IsoChantier() {
             const P = resolvePoint(d.p1), Q = resolvePoint(d.p2);
             if (!P || !Q)
                 continue;
-            const g = axisDimGeometry(P, Q, d.axis, d.off, d.flip);
+            const g = axisDimGeometry(P, Q, dimAx(d), d.off, d.flip, d.extAlt);
             const { d: dist } = distToSeg(pt, g.dA, g.dB, 0, 1);
             if (dist < bd) {
                 bd = dist;
@@ -6636,6 +6678,13 @@ function IsoChantier() {
         const P = resolvePoint(pendingPt);
         let Q = resolvePoint(p2);
         let axis = P && Q ? bestAxisFor(P, Q) : 0;
+        // deux points d'un tube oblique : cote parallèle au tube
+        if (P && Q && !p2.w) {
+            const L = Math.hypot(Q.x - P.x, Q.y - P.y);
+            const e = ISO_SCREEN_AXES[axis];
+            if (L > 4 && Math.abs(((Q.x - P.x) * e.x + (Q.y - P.y) * e.y) / L) < 0.985)
+                axis = null;
+        }
         // si le 2e point est libre, on l'aimante sur l'axe iso le plus proche
         // passant par le 1er point : la cote suit alors exactement X, Y ou Z
         if (P && Q && p2.w) {
@@ -6848,7 +6897,11 @@ function IsoChantier() {
         candidates.forEach((c) => {
             const cm = Math.hypot(c.x, c.y);
             const d = (ndx * c.x + ndy * c.y) / cm;
-            if (d > bestDot) {
+            // égalité (tube oblique à 45° dont la projection tombe pile entre
+            // deux axes) : on garde le premier axe trouvé (horizontal avant Z)
+            // — une marge évite que l'arrondi, qui varie avec le zoom, fasse
+            // basculer l'orientation des brides/organes d'un axe à l'autre
+            if (d > bestDot + 1e-6) {
                 bestDot = d;
                 best = c;
             }
@@ -7568,26 +7621,12 @@ function IsoChantier() {
             return null;
         const sel = d.id === selDim && (mode === "cote" || mode === "select");
         return React.createElement("g", { key: d.id },
-            React.createElement(AxisDimLine, { P: P, Q: Q, axisIdx: d.axis, value: d.value, off: d.off, flip: d.flip, alt: d.extAlt, tOff: { x: d.tox || 0, y: d.toy || 0 }, color: sel ? COLORS.accent : COLORS.cote }));
+            React.createElement(AxisDimLine, { P: P, Q: Q, axisIdx: dimAx(d), value: d.value, off: d.off, flip: d.flip, alt: d.extAlt, tOff: { x: d.tox || 0, y: d.toy || 0 }, color: sel ? COLORS.accent : COLORS.cote }));
     });
     const renderDnLabels = () => dnGroups.map((g, i) => {
         const lp = dnLabelPos(g.anchor);
-        const txt = "DN" + g.dn;
-        const fw = fs(11) * zoom;
-        const w = (txt.length * 0.68 + 1.2) * fw;
-        const h = 1.75 * fw;
         const sel = g.anchor.id === selSeg || mSegs.includes(g.anchor.id);
-        const cc = sel ? COLORS.accent : COLORS.ink;
-        // amorce : du bord du cadre vers le tube
-        const vx = lp.mid.x - lp.x, vy = lp.mid.y - lp.y;
-        const vl = Math.hypot(vx, vy) || 1;
-        const bx = lp.x + (vx / vl) * (w / 2) * Math.min(1, Math.abs(vx / vl) + 0.4);
-        const by = lp.y + (vy / vl) * (h / 2 + 2);
-        return (React.createElement("g", { key: "dn" + i },
-            React.createElement("line", { x1: bx, y1: by, x2: lp.mid.x, y2: lp.mid.y, stroke: cc, "stroke-width": 0.9 * Math.max(0.45, zoom) }),
-            React.createElement("circle", { cx: lp.mid.x, cy: lp.mid.y, r: 1.8 * Math.max(0.5, zoom), fill: cc }),
-            React.createElement("rect", { x: lp.x - w / 2, y: lp.y - h / 2, width: w, height: h, rx: 3 * zoom, fill: COLORS.sheet, stroke: cc, "stroke-width": 1.1 * Math.max(0.45, zoom) }),
-            React.createElement("text", { x: lp.x, y: lp.y, "font-size": fw, "font-family": "'IBM Plex Mono', monospace", "font-weight": 600, fill: cc, "text-anchor": "middle", "dominant-baseline": "central" }, txt)));
+        return leaderLabel("dn" + i, lp, "DN" + g.dn, sel ? COLORS.accent : COLORS.ink, g.anchor.id, 0.68);
     });
     const nameLabelPos = (s) => {
         var _a, _b;
@@ -7607,40 +7646,52 @@ function IsoChantier() {
     // comme au croisement de deux tubes entre eux
     const leaderGapPoints = (P, Q, excludeId) => {
         const pts = [];
-        segments.forEach((o) => {
-            if (o.id === excludeId || !nodes[o.a] || !nodes[o.b])
-                return;
-            const oA = proj(nodes[o.a]), oB = proj(nodes[o.b]);
-            const hit = segIntersect2D(P, Q, oA, oB);
+        const add = (A, B) => {
+            const hit = A && B && segIntersect2D(P, Q, A, B);
             if (hit)
                 pts.push(hit);
-            if (o.cote) {
-                const g = dimGeometry(oA, oB, 24, !!o.flip, false);
-                const hit2 = segIntersect2D(P, Q, g.dA, g.dB);
-                if (hit2)
-                    pts.push(hit2);
+        };
+        segments.forEach((o) => {
+            if (!nodes[o.a] || !nodes[o.b])
+                return;
+            const oA = proj(nodes[o.a]), oB = proj(nodes[o.b]);
+            if (o.id !== excludeId)
+                add(oA, oB);
+            if (o.cote && !o.coteHidden) {
+                const off = 24 + (o.coff || 0);
+                const g = o.caxis != null ? axisDimGeometry(oA, oB, o.caxis, off, o.flip, o.extAlt) : dimGeometry(oA, oB, off, o.flip, o.extAlt);
+                add(g.dA, g.dB);
+                add(oA, g.dA);
+                add(oB, g.dB);
             }
+        });
+        (freeDims || []).forEach((d) => {
+            if (d.hidden)
+                return;
+            const P1 = resolvePoint(d.p1), Q1 = resolvePoint(d.p2);
+            if (!P1 || !Q1)
+                return;
+            const g = axisDimGeometry(P1, Q1, dimAx(d), d.off, d.flip, d.extAlt);
+            add(g.dA, g.dB);
+            add(P1, g.dA);
+            add(Q1, g.dB);
         });
         return pts;
     };
-    const renderNameLabels = () => segments.filter((s) => s.name && !s.nameHidden).map((s) => {
-        const lp = nameLabelPos(s);
-        const txt = s.name;
+    // étiquette à trait de rappel (nom de tronçon, DN, nom d'organe) : le
+    // trait est coupé là où il passe devant un tube ou une cote
+    const leaderLabel = (key, lp, txt, cc, excludeId, wk) => {
         const fw = fs(11) * zoom;
-        const w = (txt.length * 0.62 + 1.2) * fw;
+        const w = (txt.length * (wk || 0.62) + 1.2) * fw;
         const h = 1.75 * fw;
-        const sel = s.id === selSeg || mSegs.includes(s.id);
-        const cc = sel ? COLORS.accent : COLORS.topbar;
         const vx = lp.mid.x - lp.x, vy = lp.mid.y - lp.y;
         const vl = Math.hypot(vx, vy) || 1;
         const bx = lp.x + (vx / vl) * (w / 2) * Math.min(1, Math.abs(vx / vl) + 0.4);
         const by = lp.y + (vy / vl) * (h / 2 + 2);
-        // découpe le trait de rappel en plusieurs segments avec une petite
-        // coupure à chaque croisement détecté (tube ou cote)
         const P = { x: bx, y: by }, Q = lp.mid;
         const totalLen = Math.hypot(Q.x - P.x, Q.y - P.y) || 1;
         const ux = (Q.x - P.x) / totalLen, uy = (Q.y - P.y) / totalLen;
-        const gapPts = leaderGapPoints(P, Q, s.id)
+        const gapPts = leaderGapPoints(P, Q, excludeId)
             .map((pt) => Math.hypot(pt.x - P.x, pt.y - P.y))
             .filter((d) => d > 3 && d < totalLen - 3)
             .sort((a, b) => a - b);
@@ -7654,11 +7705,30 @@ function IsoChantier() {
         });
         if (curD < totalLen)
             leaderSegs.push([curD, totalLen]);
-        return (React.createElement("g", { key: "name" + s.id },
+        return (React.createElement("g", { key },
             leaderSegs.map(([d0, d1], i) => (React.createElement("line", { key: i, x1: P.x + ux * d0, y1: P.y + uy * d0, x2: P.x + ux * d1, y2: P.y + uy * d1, stroke: cc, "stroke-width": 0.9 * Math.max(0.45, zoom) }))),
             React.createElement("circle", { cx: lp.mid.x, cy: lp.mid.y, r: 1.8 * Math.max(0.5, zoom), fill: cc }),
             React.createElement("rect", { x: lp.x - w / 2, y: lp.y - h / 2, width: w, height: h, rx: 3 * zoom, fill: COLORS.sheet, stroke: cc, "stroke-width": 1.1 * Math.max(0.45, zoom) }),
             React.createElement("text", { x: lp.x, y: lp.y, "font-size": fw, "font-family": "'IBM Plex Mono', monospace", "font-weight": 600, fill: cc, "text-anchor": "middle", "dominant-baseline": "central" }, txt)));
+    };
+    // nom d'organe : cadre décalé de (fnlx, fnly) depuis l'organe
+    const fitNameLabelPos = (f) => {
+        const p = fittingScreen(f);
+        if (!p)
+            return null;
+        return { mid: { x: p.x, y: p.y }, x: p.x + (f.fnlx != null ? f.fnlx : 44) * zoom, y: p.y + (f.fnly != null ? f.fnly : -40) * zoom };
+    };
+    const renderFitNameLabels = () => fittings.filter((f) => f.name && !f.nameHidden).map((f) => {
+        const lp = fitNameLabelPos(f);
+        if (!lp)
+            return null;
+        const sel = f.id === selFit || mFits.includes(f.id);
+        return leaderLabel("fn" + f.id, lp, f.name, sel ? COLORS.accent : COLORS.topbar, f.segId);
+    });
+    const renderNameLabels = () => segments.filter((s) => s.name && !s.nameHidden).map((s) => {
+        const lp = nameLabelPos(s);
+        const sel = s.id === selSeg || mSegs.includes(s.id);
+        return leaderLabel("name" + s.id, lp, s.name, sel ? COLORS.accent : COLORS.topbar, s.id);
     });
     const renderPending = () => {
         if (!pendingPt || mode !== "cote")
@@ -8047,6 +8117,8 @@ function IsoChantier() {
                 };
             };
             const axisDimGeometryE = (P, Q, axisIdx, off, flip, alt) => {
+                if (axisIdx && typeof axisIdx === "object")
+                    return obliqueDimGeom(P, Q, off * rv.zoom, flip, alt);
                 const u = ISO_SCREEN_AXES[axisIdx];
                 const others = ISO_SCREEN_AXES
                     .map((cAx, i) => ({ c: cAx, i, v: Math.round(Math.abs(u.x * cAx.x + u.y * cAx.y) * 1e6) / 1e6 }))
@@ -9047,26 +9119,76 @@ function IsoChantier() {
                 const P = resolvePointE(d.p1), Q = resolvePointE(d.p2);
                 if (!P || !Q || d.hidden)
                     continue;
-                drawAxisDimE(P, Q, d.axis, d.value, COLORS.cote, d.off, d.flip, { x: d.tox || 0, y: d.toy || 0 }, d.extAlt);
+                drawAxisDimE(P, Q, dimAx(d), d.value, COLORS.cote, d.off, d.flip, { x: d.tox || 0, y: d.toy || 0 }, d.extAlt);
             }
-            // ---- étiquettes DN ----
-            for (const g of dnGroups) {
-                const lp = dnLabelPosE(g.anchor);
-                const txt = "DN" + g.dn;
+            // ---- étiquettes à trait de rappel (DN, noms de tronçon, noms
+            // d'organe) : trait coupé devant les tubes et les cotes ----
+            const leaderGapPointsE = (P, Q, excludeId) => {
+                const pts = [];
+                const add = (A, B) => {
+                    const hit = A && B && segIntersect2D(P, Q, A, B);
+                    if (hit)
+                        pts.push(hit);
+                };
+                segments.forEach((o) => {
+                    if (!nodes[o.a] || !nodes[o.b])
+                        return;
+                    const oA = projE(nodes[o.a]), oB = projE(nodes[o.b]);
+                    if (o.id !== excludeId)
+                        add(oA, oB);
+                    if (o.cote && !o.coteHidden) {
+                        const off = 24 + (o.coff || 0);
+                        const g = o.caxis != null ? axisDimGeometryE(oA, oB, o.caxis, off, o.flip, o.extAlt) : dimGeometryE(oA, oB, off, o.flip, o.extAlt);
+                        add(g.dA, g.dB);
+                        add(oA, g.dA);
+                        add(oB, g.dB);
+                    }
+                });
+                (freeDims || []).forEach((d) => {
+                    if (d.hidden)
+                        return;
+                    const P1 = resolvePointE(d.p1), Q1 = resolvePointE(d.p2);
+                    if (!P1 || !Q1)
+                        return;
+                    const g = axisDimGeometryE(P1, Q1, dimAx(d), d.off, d.flip, d.extAlt);
+                    add(g.dA, g.dB);
+                    add(P1, g.dA);
+                    add(Q1, g.dB);
+                });
+                return pts;
+            };
+            const drawLeaderLabelE = (lp, txt, cc, excludeId, wk) => {
                 const fw = fs(11) * rv.zoom;
-                const w = (txt.length * 0.68 + 1.2) * fw;
+                const w = (txt.length * (wk || 0.62) + 1.2) * fw;
                 const h = 1.75 * fw;
-                const cc = COLORS.ink;
                 const vx = lp.mid.x - lp.x, vy = lp.mid.y - lp.y;
                 const vl = Math.hypot(vx, vy) || 1;
                 const bx = lp.x + (vx / vl) * (w / 2) * Math.min(1, Math.abs(vx / vl) + 0.4);
                 const by = lp.y + (vy / vl) * (h / 2 + 2);
+                const Pl = { x: bx, y: by }, Ql = lp.mid;
+                const totalLen = Math.hypot(Ql.x - Pl.x, Ql.y - Pl.y) || 1;
+                const ux = (Ql.x - Pl.x) / totalLen, uy = (Ql.y - Pl.y) / totalLen;
+                const gapPts = leaderGapPointsE(Pl, Ql, excludeId)
+                    .map((pt) => Math.hypot(pt.x - Pl.x, pt.y - Pl.y))
+                    .filter((d) => d > 3 && d < totalLen - 3)
+                    .sort((a, b) => a - b);
+                const GAP = 5 * zl;
                 ctx.strokeStyle = cc;
                 ctx.lineWidth = 0.9 * zl;
-                ctx.beginPath();
-                ctx.moveTo(bx, by);
-                ctx.lineTo(lp.mid.x, lp.mid.y);
-                ctx.stroke();
+                let curD = 0;
+                const seg = (d0, d1) => {
+                    ctx.beginPath();
+                    ctx.moveTo(Pl.x + ux * d0, Pl.y + uy * d0);
+                    ctx.lineTo(Pl.x + ux * d1, Pl.y + uy * d1);
+                    ctx.stroke();
+                };
+                gapPts.forEach((d) => {
+                    if (d - GAP / 2 > curD)
+                        seg(curD, d - GAP / 2);
+                    curD = Math.max(curD, d + GAP / 2);
+                });
+                if (curD < totalLen)
+                    seg(curD, totalLen);
                 ctx.beginPath();
                 ctx.arc(lp.mid.x, lp.mid.y, 1.8 * Math.max(0.5, rv.zoom), 0, Math.PI * 2);
                 ctx.fillStyle = cc;
@@ -9079,8 +9201,9 @@ function IsoChantier() {
                 ctx.strokeStyle = cc;
                 ctx.stroke();
                 drawTextE(txt, lp.x, lp.y, fw, cc, { mono: true, weight: 600 });
-            }
-            // ---- étiquettes noms de tronçon ----
+            };
+            for (const g of dnGroups)
+                drawLeaderLabelE(dnLabelPosE(g.anchor), "DN" + g.dn, COLORS.ink, g.anchor.id, 0.68);
             const nameLabelPosE = (s) => {
                 var _a, _b;
                 const A = projE(nodes[s.a]), B = projE(nodes[s.b]);
@@ -9089,75 +9212,18 @@ function IsoChantier() {
                 const mid = { x: A.x + (B.x - A.x) * tt, y: A.y + (B.y - A.y) * tt };
                 return { mid, x: c0.x + ((_a = s.namelx) !== null && _a !== void 0 ? _a : -40) * rv.zoom, y: c0.y + ((_b = s.namely) !== null && _b !== void 0 ? _b : 44) * rv.zoom };
             };
-            const leaderGapPointsE = (P, Q, excludeId) => {
-                const pts = [];
-                segments.forEach((o) => {
-                    if (o.id === excludeId || !nodes[o.a] || !nodes[o.b])
-                        return;
-                    const oA = projE(nodes[o.a]), oB = projE(nodes[o.b]);
-                    const hit = segIntersect2D(P, Q, oA, oB);
-                    if (hit)
-                        pts.push(hit);
-                    if (o.cote) {
-                        const g = dimGeometryE(oA, oB, 24, !!o.flip, false);
-                        const hit2 = segIntersect2D(P, Q, g.dA, g.dB);
-                        if (hit2)
-                            pts.push(hit2);
-                    }
-                });
-                return pts;
-            };
             for (const s of segments) {
                 if (!s.name || s.nameHidden)
                     continue;
-                const lp = nameLabelPosE(s);
-                const txt = s.name;
-                const fw = fs(11) * rv.zoom;
-                const w = (txt.length * 0.62 + 1.2) * fw;
-                const h = 1.75 * fw;
-                const cc = COLORS.topbar;
-                const vx = lp.mid.x - lp.x, vy = lp.mid.y - lp.y;
-                const vl = Math.hypot(vx, vy) || 1;
-                const bx = lp.x + (vx / vl) * (w / 2) * Math.min(1, Math.abs(vx / vl) + 0.4);
-                const by = lp.y + (vy / vl) * (h / 2 + 2);
-                const Pl = { x: bx, y: by }, Ql = lp.mid;
-                const totalLen = Math.hypot(Ql.x - Pl.x, Ql.y - Pl.y) || 1;
-                const ux = (Ql.x - Pl.x) / totalLen, uy = (Ql.y - Pl.y) / totalLen;
-                const gapPts = leaderGapPointsE(Pl, Ql, s.id)
-                    .map((pt) => Math.hypot(pt.x - Pl.x, pt.y - Pl.y))
-                    .filter((d) => d > 3 && d < totalLen - 3)
-                    .sort((a, b) => a - b);
-                const GAP = 5 * zl;
-                ctx.strokeStyle = cc;
-                ctx.lineWidth = 0.9 * zl;
-                let curD = 0;
-                gapPts.forEach((d) => {
-                    if (d - GAP / 2 > curD) {
-                        ctx.beginPath();
-                        ctx.moveTo(Pl.x + ux * curD, Pl.y + uy * curD);
-                        ctx.lineTo(Pl.x + ux * (d - GAP / 2), Pl.y + uy * (d - GAP / 2));
-                        ctx.stroke();
-                    }
-                    curD = Math.max(curD, d + GAP / 2);
-                });
-                if (curD < totalLen) {
-                    ctx.beginPath();
-                    ctx.moveTo(Pl.x + ux * curD, Pl.y + uy * curD);
-                    ctx.lineTo(Ql.x, Ql.y);
-                    ctx.stroke();
-                }
-                ctx.beginPath();
-                ctx.arc(lp.mid.x, lp.mid.y, 1.8 * Math.max(0.5, rv.zoom), 0, Math.PI * 2);
-                ctx.fillStyle = cc;
-                ctx.fill();
-                ctx.fillStyle = COLORS.sheet;
-                ctx.beginPath();
-                ctx.rect(lp.x - w / 2, lp.y - h / 2, w, h);
-                ctx.fill();
-                ctx.lineWidth = 1.1 * zl;
-                ctx.strokeStyle = cc;
-                ctx.stroke();
-                drawTextE(txt, lp.x, lp.y, fw, cc, { mono: true, weight: 600 });
+                drawLeaderLabelE(nameLabelPosE(s), s.name, COLORS.topbar, s.id);
+            }
+            for (const f of fittings) {
+                if (!f.name || f.nameHidden)
+                    continue;
+                const p = fittingScreenE(f);
+                if (!p)
+                    continue;
+                drawLeaderLabelE({ mid: { x: p.x, y: p.y }, x: p.x + (f.fnlx != null ? f.fnlx : 44) * rv.zoom, y: p.y + (f.fnly != null ? f.fnly : -40) * rv.zoom }, f.name, COLORS.topbar, f.segId);
             }
             // ---- nomenclature ----
             let nomBox = null;
@@ -9384,7 +9450,24 @@ function IsoChantier() {
             for (const nk of [s.a, s.b]) {
                 if (teoNodes.has(nk))
                     continue; // jamais traverser un nœud à té réduit
+                // piquage (3 tubes ou plus sur le nœud) : le DN ne continue
+                // que dans le prolongement en ligne droite — il ne descend
+                // jamais dans la branche, et ne remonte pas depuis la branche
+                // dans la ligne principale
+                const tee = (byNode[nk] || []).length >= 3;
+                const dirFrom = (sg) => {
+                    const P = nodes[nk], Q = nodes[sg.a === nk ? sg.b : sg.a];
+                    const v = { x: Q.x - P.x, y: Q.y - P.y, z: Q.z - P.z };
+                    const L = Math.hypot(v.x, v.y, v.z) || 1;
+                    return { x: v.x / L, y: v.y / L, z: v.z / L };
+                };
+                const dS = tee ? dirFrom(s) : null;
                 for (const nb of byNode[nk] || []) {
+                    if (tee && nb.id !== s.id) {
+                        const dN = dirFrom(nb);
+                        if (dS.x * dN.x + dS.y * dN.y + dS.z * dN.z > -0.99)
+                            continue;
+                    }
                     if (!visited.has(nb.id)) {
                         visited.add(nb.id);
                         queue.push(nb.id);
@@ -9763,6 +9846,7 @@ function IsoChantier() {
     const labS = { fontSize: 11.5, fontWeight: 800, color: COLORS.cote, flexShrink: 0, letterSpacing: 0.3 };
     const cbx = { ...cb, flexShrink: 0 };
     const cbDel = { ...cb, flexShrink: 0, fontSize: 17, borderColor: "#B3341C", color: "#B3341C" };
+    const fitNameable = (f) => !!f && !STRUCTURE_TYPES.includes(f.type) && !["texte", "forme", "pente", "suite"].includes(f.type);
     const isStructSel = selectedFitting && STRUCTURE_TYPES.includes(selectedFitting.type);
     const isTextSel = selectedFitting && selectedFitting.type === "texte";
     const isShapeSel = selectedFitting && selectedFitting.type === "forme";
@@ -10112,6 +10196,7 @@ function IsoChantier() {
                 renderFreeDims(),
                 renderDnLabels(),
                 renderNameLabels(),
+                renderFitNameLabels(),
                 renderPending(),
                 renderNodes(),
                 renderCartouche(),
@@ -10331,8 +10416,12 @@ function IsoChantier() {
                     React.createElement("button", { style: cb, onClick: () => updateFit({ scl: Math.min(isStructSel ? 8 : 3, (selectedFitting.scl || 1) + (isStructSel ? 0.25 : 0.15)) }) }, "\u25B2"),
                     React.createElement("button", { style: cb, onClick: () => updateFit({ scl: Math.max(isStructSel ? 0.4 : 0.5, (selectedFitting.scl || 1) - (isStructSel ? 0.2 : 0.15)) }) }, "\u25BC"))),
                 React.createElement(ColorSwatch, { title: "Couleur", value: selectedFitting.color || (isStructSel ? COLORS.structure : isApp3(selectedFitting) ? APP_COL.stroke : COLORS.ink), onChange: (c) => updateFit({ color: c }) }),
+                fitNameable(selectedFitting) && React.createElement("button", { title: "Plus d'options (nom de l'organe)", style: { ...(fitMore ? cbOn : cb), flexShrink: 0 }, onClick: () => setFitMore(!fitMore) }, "\u22EF"),
                 React.createElement("button", { title: "Dupliquer", "aria-label": "Dupliquer", style: { ...cb, marginLeft: "auto", fontSize: 20 }, onClick: () => duplicateSelection([], [selFit]) }, "+"),
                 React.createElement("button", { title: "Supprimer", "aria-label": "Supprimer", onClick: () => removeFitting(selFit), style: { ...cb, fontSize: 17, borderColor: "#B3341C", color: "#B3341C" } }, "\u2715")),
+            fitMore && fitNameable(selectedFitting) && React.createElement("div", { style: rowS },
+                React.createElement("span", { style: labS }, "Nom"),
+                React.createElement(TextField, { placeholder: "Nom de l'organe", width: 190, value: selectedFitting.name || "", onInput: (e) => updateFit({ name: e.target.value || null }), hidden: !!selectedFitting.nameHidden, onToggleHidden: selectedFitting.name ? () => updateFit({ nameHidden: !selectedFitting.nameHidden }) : null })),
             selectedFitting.type === "teoduit" && (React.createElement("div", { style: rowS },
                 React.createElement("span", { style: labS }, "DN piquage"),
                 React.createElement("select", { value: selectedFitting.branchDn || "", onInput: (e) => updateFit({ branchDn: e.target.value ? +e.target.value : null }), style: { padding: "8px 10px", borderRadius: 8, border: `1.4px solid ${COLORS.ink}`, fontSize: 16, background: "#fff" } },
