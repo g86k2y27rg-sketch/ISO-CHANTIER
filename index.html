@@ -111,7 +111,7 @@ const FITTING_LABELS = {
     bobinef: "Bobine F", bobine: "Bobine F/S", capsoude: "Cap soudé", flexible: "Flexible",
     circulateur: "Circulateur", echangeur: "Échangeur",
     bache: "Bâche",
-    soudure: "Soudure BW", souduresw: "Soudure SW",
+    soudure: "Soudure BW", souduresw: "Soudure SW", piquage: "Piquage",
     mur: "Mur/Voile", sol: "Sol", tremie: "Trémie",
     texte: "Texte", pente: "Pente", suite: "Suite page",
 };
@@ -125,7 +125,7 @@ const WORI_TYPES = new Set(["bride", "bridesimple", "vanne", "boule", "vpapillon
 const INLINE_TYPES = new Set([
     "vanne", "boule", "vpapillon", "clapet",
     "te", "tesw", "teoduit", "reduction", "bride", "bridesimple", "support", "capsoude", "flexible",
-    "bobinef", "bobine", "soudure", "souduresw",
+    "bobinef", "bobine", "soudure", "souduresw", "piquage",
 ]);
 // appareils : symboles volumineux, redimensionnables à la poignée comme les formes
 const APPAREIL_TYPES = new Set([
@@ -137,7 +137,7 @@ const CATS = ["Organes", "Accessoires", "Soudure", "Appareils", "Autres"];
 const CAT_INFO = {
     "Organes": { icon: "\u22C8", color: "#E8600A", sub: "Vannes, clapet" },
     "Accessoires": { icon: "\u2533", color: "#282456", sub: "Brides, t\u00E9s, r\u00E9ductions, supports\u2026" },
-    "Soudure": { icon: "\u2736", color: "#B3341C", sub: "Soudure BW, SW" },
+    "Soudure": { icon: "\u2736", color: "#B3341C", sub: "Soudure BW, SW, piquage" },
     "Appareils": { icon: "\u25A3", color: "#1D5FA8", sub: "Circulateur, \u00E9changeur, b\u00E2che" },
     "Autres": { icon: "\u22EF", color: "#7A8394", sub: "G\u00E9nie civil, formes, annotations" },
 };
@@ -165,6 +165,7 @@ const PALETTE = [
     // Soudure
     { cat: "Soudure", type: "soudure", label: "Soudure BW" },
     { cat: "Soudure", type: "souduresw", label: "Soudure SW" },
+    { cat: "Soudure", type: "piquage", label: "Piquage" },
     // Autres : génie civil, formes, annotations
     { cat: "Autres", grp: "G\u00E9nie civil", type: "mur", label: "Mur/Voile" },
     { cat: "Autres", grp: "G\u00E9nie civil", type: "sol", label: "Sol" },
@@ -194,29 +195,77 @@ const COS30 = Math.cos(Math.PI / 6);
 // coupe un trait [P,Q] là où il croise l'une des lignes données (tubes) :
 // renvoie les morceaux restants, avec un blanc de largeur gap à chaque
 // croisement (comme les traits de rappel des étiquettes)
-function cutSegPieces(P, Q, lines, gap) {
+// portion [t0, t1] d'un segment à l'intérieur d'un polygone convexe
+// (Cyrus-Beck), ou null
+function clipConvexT(P, Q, poly) {
+    const n = poly.length;
+    if (n < 3)
+        return null;
+    let cx = 0, cy = 0;
+    poly.forEach((q) => { cx += q.x; cy += q.y; });
+    cx /= n;
+    cy /= n;
+    const dx = Q.x - P.x, dy = Q.y - P.y;
+    let t0 = 0, t1 = 1;
+    for (let i = 0; i < n; i++) {
+        const A = poly[i], B = poly[(i + 1) % n];
+        let nx = -(B.y - A.y), ny = B.x - A.x;
+        if (nx * (cx - A.x) + ny * (cy - A.y) < 0) {
+            nx = -nx;
+            ny = -ny;
+        }
+        const num = nx * (P.x - A.x) + ny * (P.y - A.y);
+        const den = nx * dx + ny * dy;
+        if (Math.abs(den) < 1e-12) {
+            if (num < 0)
+                return null;
+            continue;
+        }
+        const t = -num / den;
+        if (den > 0)
+            t0 = Math.max(t0, t);
+        else
+            t1 = Math.min(t1, t);
+        if (t0 > t1)
+            return null;
+    }
+    return t1 - t0 > 1e-6 ? [t0, t1] : null;
+}
+// rectangle (éventuellement tourné) sous forme de polygone
+function rectPoly(cx, cy, w, h, angDeg) {
+    const a = ((angDeg || 0) * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+    return [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]].map(([x, y]) => ({ x: cx + x * c - y * s, y: cy + x * s + y * c }));
+}
+function cutSegPieces(P, Q, lines, gap, polys) {
     const total = Math.hypot(Q.x - P.x, Q.y - P.y);
     if (!(total > 0))
         return [[P, Q]];
     const ux = (Q.x - P.x) / total, uy = (Q.y - P.y) / total;
-    const ds = [];
+    const iv = [];
     for (const [A, B] of lines) {
         const hit = segIntersect2D(P, Q, A, B);
         if (!hit)
             continue;
         const d = Math.hypot(hit.x - P.x, hit.y - P.y);
         if (d > gap * 0.7 && d < total - gap * 0.7)
-            ds.push(d);
+            iv.push([d - gap / 2, d + gap / 2]);
     }
-    if (!ds.length)
+    // textes / organes traversés : le trait s'interrompt sur toute la
+    // traversée (plus un petit dégagement)
+    for (const poly of polys || []) {
+        const r = clipConvexT(P, Q, poly);
+        if (r)
+            iv.push([r[0] * total - gap * 0.3, r[1] * total + gap * 0.3]);
+    }
+    if (!iv.length)
         return [[P, Q]];
-    ds.sort((a, b) => a - b);
+    iv.sort((a, b) => a[0] - b[0]);
     const out = [];
     let cur = 0;
-    for (const d of ds) {
-        if (d - gap / 2 > cur)
-            out.push([cur, d - gap / 2]);
-        cur = Math.max(cur, d + gap / 2);
+    for (const [d0, d1] of iv) {
+        if (d0 > cur)
+            out.push([cur, d0]);
+        cur = Math.max(cur, d1);
     }
     if (cur < total)
         out.push([cur, total]);
@@ -928,6 +977,195 @@ const TextField = ({ placeholder, value, onInput, hidden, onToggleHidden, width,
             borderRadius: 8, border: `1.4px solid ${COLORS.ink}`,
         } }),
     onToggleHidden && React.createElement(EyeToggle, { hidden, onToggle: onToggleHidden })));
+// ---- Outils › Tableaux : accessoires normalisés (tubes, brides, coudes,
+// tés, réductions, fonds) — cotes en mm ----
+const NT_ROWS = [
+    // DN, NPS, Ø ext ASME (mm), épaisseurs ASME B36.10M / B36.19M (mm)
+    // [5S, 10S, 40S/STD, 40, 80S/XS, 80, 160, XXS]
+    [15, "1/2", 21.3, [1.65, 2.11, 2.77, 2.77, 3.73, 3.73, 4.78, 7.47]],
+    [20, "3/4", 26.7, [1.65, 2.11, 2.87, 2.87, 3.91, 3.91, 5.56, 7.82]],
+    [25, "1", 33.4, [1.65, 2.77, 3.38, 3.38, 4.55, 4.55, 6.35, 9.09]],
+    [32, "1 1/4", 42.2, [1.65, 2.77, 3.56, 3.56, 4.85, 4.85, 6.35, 9.70]],
+    [40, "1 1/2", 48.3, [1.65, 2.77, 3.68, 3.68, 5.08, 5.08, 7.14, 10.15]],
+    [50, "2", 60.3, [1.65, 2.77, 3.91, 3.91, 5.54, 5.54, 8.74, 11.07]],
+    [65, "2 1/2", 73.0, [2.11, 3.05, 5.16, 5.16, 7.01, 7.01, 9.53, 14.02]],
+    [80, "3", 88.9, [2.11, 3.05, 5.49, 5.49, 7.62, 7.62, 11.13, 15.24]],
+    [100, "4", 114.3, [2.11, 3.05, 6.02, 6.02, 8.56, 8.56, 13.49, 17.12]],
+    [125, "5", 141.3, [2.77, 3.40, 6.55, 6.55, 9.53, 9.53, 15.88, 19.05]],
+    [150, "6", 168.3, [2.77, 3.40, 7.11, 7.11, 10.97, 10.97, 18.26, 21.95]],
+    [200, "8", 219.1, [2.77, 3.76, 8.18, 8.18, 12.70, 12.70, 23.01, 22.23]],
+    [250, "10", 273.0, [3.40, 4.19, 9.27, 9.27, 12.70, 15.09, 28.58, 25.40]],
+    [300, "12", 323.8, [3.96, 4.57, 9.53, 10.31, 12.70, 17.48, 33.32, 25.40]],
+    [350, "14", 355.6, [3.96, 4.78, 9.53, 11.13, 12.70, 19.05, 35.71, null]],
+    [400, "16", 406.4, [4.19, 4.78, 9.53, 12.70, 12.70, 21.44, 40.49, null]],
+    [450, "18", 457.0, [4.19, 4.78, 9.53, 14.27, 12.70, 23.83, 45.24, null]],
+    [500, "20", 508.0, [4.78, 5.54, 9.53, 15.09, 12.70, 26.19, 50.01, null]],
+    [600, "24", 610.0, [5.54, 6.35, 9.53, 17.48, 12.70, 30.96, 59.54, null]],
+];
+const NT_SCH = ["5S", "10S", "40S / STD", "40", "80S / XS", "80", "160", "XXS"];
+// EN 1092-1 : [D, K, nb boulons, filetage M] par PN ; PN10 DN≤150 = PN16,
+// PN10/16 DN≤40 = PN40, PN25 DN≤150 = PN40 (règles de la norme)
+const NT_EN_PN40 = {
+    15: [95, 65, 4, 12], 20: [105, 75, 4, 12], 25: [115, 85, 4, 12], 32: [140, 100, 4, 16], 40: [150, 110, 4, 16],
+    50: [165, 125, 4, 16], 65: [185, 145, 8, 16], 80: [200, 160, 8, 16], 100: [235, 190, 8, 20], 125: [270, 220, 8, 24],
+    150: [300, 250, 8, 24], 200: [375, 320, 12, 27], 250: [450, 385, 12, 30], 300: [515, 450, 16, 30], 350: [580, 510, 16, 33],
+    400: [660, 585, 16, 36], 450: [685, 610, 20, 36], 500: [755, 670, 20, 39], 600: [890, 795, 20, 45],
+};
+const NT_EN_PN16 = {
+    15: [95, 65, 4, 12], 20: [105, 75, 4, 12], 25: [115, 85, 4, 12], 32: [140, 100, 4, 16], 40: [150, 110, 4, 16],
+    50: [165, 125, 4, 16], 65: [185, 145, 8, 16], 80: [200, 160, 8, 16], 100: [220, 180, 8, 16], 125: [250, 210, 8, 16],
+    150: [285, 240, 8, 20], 200: [340, 295, 12, 20], 250: [405, 355, 12, 24], 300: [460, 410, 12, 24], 350: [520, 470, 16, 24],
+    400: [580, 525, 16, 27], 450: [640, 585, 20, 27], 500: [715, 650, 20, 30], 600: [840, 770, 20, 33],
+};
+const NT_EN_PN10 = {
+    ...NT_EN_PN16,
+    200: [340, 295, 8, 20], 250: [395, 350, 12, 20], 300: [445, 400, 12, 20], 350: [505, 460, 16, 20],
+    400: [565, 515, 16, 24], 450: [615, 565, 20, 24], 500: [670, 620, 20, 24], 600: [780, 725, 20, 27],
+};
+const NT_EN_PN25 = {
+    ...NT_EN_PN40,
+    200: [360, 310, 12, 24], 250: [425, 370, 12, 27], 300: [485, 430, 16, 27], 350: [555, 490, 16, 30],
+    400: [620, 550, 16, 33], 450: [670, 600, 20, 33], 500: [730, 660, 20, 33], 600: [845, 770, 20, 36],
+};
+const NT_HOLE = { 12: 14, 16: 18, 20: 22, 24: 26, 27: 30, 30: 33, 33: 36, 36: 39, 39: 42, 45: 48 };
+// ASME B16.5 (pouces) : [Ø ext, entraxe, nb boulons, Ø boulon, hauteur WN Y]
+const NT_B165 = {
+    150: {
+        15: [3.50, 2.38, 4, "1/2", 1.88], 20: [3.88, 2.75, 4, "1/2", 2.06], 25: [4.25, 3.12, 4, "1/2", 2.19], 32: [4.62, 3.50, 4, "1/2", 2.25],
+        40: [5.00, 3.88, 4, "1/2", 2.44], 50: [6.00, 4.75, 4, "5/8", 2.50], 65: [7.00, 5.50, 4, "5/8", 2.75], 80: [7.50, 6.00, 4, "5/8", 2.75],
+        100: [9.00, 7.50, 8, "5/8", 3.00], 125: [10.00, 8.50, 8, "3/4", 3.50], 150: [11.00, 9.50, 8, "3/4", 3.50], 200: [13.50, 11.75, 8, "3/4", 4.00],
+        250: [16.00, 14.25, 12, "7/8", 4.00], 300: [19.00, 17.00, 12, "7/8", 4.50], 350: [21.00, 18.75, 12, "1", 5.00], 400: [23.50, 21.25, 16, "1", 5.00],
+        450: [25.00, 22.75, 16, "1 1/8", 5.50], 500: [27.50, 25.00, 20, "1 1/8", 5.69], 600: [32.00, 29.50, 20, "1 1/4", 6.00],
+    },
+    300: {
+        15: [3.75, 2.62, 4, "1/2", 2.06], 20: [4.62, 3.25, 4, "5/8", 2.25], 25: [4.88, 3.50, 4, "5/8", 2.44], 32: [5.25, 3.88, 4, "5/8", 2.56],
+        40: [6.12, 4.50, 4, "3/4", 2.69], 50: [6.50, 5.00, 8, "5/8", 2.75], 65: [7.50, 5.88, 8, "3/4", 3.00], 80: [8.25, 6.62, 8, "3/4", 3.12],
+        100: [10.00, 7.88, 8, "3/4", 3.38], 125: [11.00, 9.25, 8, "3/4", 3.88], 150: [12.50, 10.62, 12, "3/4", 3.88], 200: [15.00, 13.00, 12, "7/8", 4.38],
+        250: [17.50, 15.25, 16, "1", 4.62], 300: [20.50, 17.75, 16, "1 1/8", 5.12], 350: [23.00, 20.25, 20, "1 1/8", 5.62], 400: [25.50, 22.50, 20, "1 1/4", 5.75],
+        450: [28.00, 24.75, 24, "1 1/4", 6.25], 500: [30.50, 27.00, 24, "1 1/4", 6.38], 600: [36.00, 32.00, 24, "1 1/2", 6.62],
+    },
+};
+// ASME B16.9 (pouces) : coude 90° LR (A), 45° LR (B), 90° SR (A), té égal
+// (C = M), réduction (H), fond (E)
+const NT_B169 = {
+    15: { lr90: 1.50, lr45: 0.62, sr90: null, te: 1.00, red: null, cap: 1.00 },
+    20: { lr90: 1.12, lr45: 0.44, sr90: null, te: 1.12, red: 1.50, cap: 1.00 },
+    25: { lr90: 1.50, lr45: 0.88, sr90: 1.00, te: 1.50, red: 2.00, cap: 1.50 },
+    32: { lr90: 1.88, lr45: 1.00, sr90: 1.25, te: 1.88, red: 2.00, cap: 1.50 },
+    40: { lr90: 2.25, lr45: 1.12, sr90: 1.50, te: 2.25, red: 2.50, cap: 1.50 },
+    50: { lr90: 3.00, lr45: 1.38, sr90: 2.00, te: 2.50, red: 3.00, cap: 1.50 },
+    65: { lr90: 3.75, lr45: 1.75, sr90: 2.50, te: 3.00, red: 3.50, cap: 1.50 },
+    80: { lr90: 4.50, lr45: 2.00, sr90: 3.00, te: 3.38, red: 3.50, cap: 2.00 },
+    100: { lr90: 6.00, lr45: 2.50, sr90: 4.00, te: 4.12, red: 4.00, cap: 2.50 },
+    125: { lr90: 7.50, lr45: 3.12, sr90: 5.00, te: 4.88, red: 5.00, cap: 3.00 },
+    150: { lr90: 9.00, lr45: 3.75, sr90: 6.00, te: 5.62, red: 5.50, cap: 3.50 },
+    200: { lr90: 12.00, lr45: 5.00, sr90: 8.00, te: 7.00, red: 6.00, cap: 4.00 },
+    250: { lr90: 15.00, lr45: 6.25, sr90: 10.00, te: 8.50, red: 7.00, cap: 5.00 },
+    300: { lr90: 18.00, lr45: 7.50, sr90: 12.00, te: 10.00, red: 8.00, cap: 6.00 },
+    350: { lr90: 21.00, lr45: 8.75, sr90: 14.00, te: 11.00, red: 13.00, cap: 6.50 },
+    400: { lr90: 24.00, lr45: 10.00, sr90: 16.00, te: 12.00, red: 14.00, cap: 7.00 },
+    450: { lr90: 27.00, lr45: 11.25, sr90: 18.00, te: 13.50, red: 15.00, cap: 8.00 },
+    500: { lr90: 30.00, lr45: 12.50, sr90: 20.00, te: 15.00, red: 20.00, cap: 9.00 },
+    600: { lr90: 36.00, lr45: 15.00, sr90: 24.00, te: 17.00, red: 20.00, cap: 10.50 },
+};
+const NormTables = ({ onClose }) => {
+    const [tab, setTab] = useState("tubes");
+    const [sch, setSch] = useState(2);
+    const [inox, setInox] = useState(false);
+    const [pn, setPn] = useState("PN16");
+    const [dnF, setDnF] = useState(null);
+    const inMm = (v) => (v == null ? null : Math.round(v * 25.4 * 10) / 10);
+    const f1 = (v) => (v == null ? "—" : (Math.round(v * 10) / 10).toFixed(1).replace(".", ","));
+    const f2 = (v) => (v == null ? "—" : v.toFixed(2).replace(".", ","));
+    const f0 = (v) => (v == null ? "—" : String(Math.round(v)));
+    const chipS = (on) => ({
+        padding: "6px 9px", borderRadius: 8, border: `1.4px solid ${COLORS.ink}`, flexShrink: 0,
+        background: on ? COLORS.ink : "transparent", color: on ? COLORS.paper : COLORS.ink,
+        fontSize: 12.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "'Archivo', sans-serif",
+    });
+    const chips = (opts, val, set) => React.createElement("div", { style: { display: "flex", gap: 6, overflowX: "auto", overflowY: "hidden", flexShrink: 0, paddingBottom: 2 } },
+        opts.map(([v, l]) => React.createElement("button", { key: String(v), style: chipS(val === v), onClick: () => set(v) }, l)));
+    const rows = NT_ROWS.filter((r) => dnF == null || r[0] === dnF);
+    const th = { position: "sticky", top: 0, background: COLORS.ink, color: COLORS.paper, fontSize: 11, fontWeight: 700, padding: "7px 6px", textAlign: "right", whiteSpace: "nowrap", zIndex: 1 };
+    const td = { fontSize: 12.5, padding: "5px 6px", textAlign: "right", whiteSpace: "nowrap", fontFamily: "'IBM Plex Mono', monospace", borderBottom: `1px solid ${COLORS.gridStrong}` };
+    const table = (heads, data) => React.createElement("div", { style: { overflow: "auto", border: `1.4px solid ${COLORS.gridStrong}`, borderRadius: 10, flexShrink: 0, background: COLORS.sheet } },
+        React.createElement("table", { style: { borderCollapse: "collapse", width: "100%" } },
+            React.createElement("thead", null, React.createElement("tr", null, heads.map((h, i) => React.createElement("th", { key: i, style: { ...th, textAlign: i === 0 ? "left" : "right", left: i === 0 ? 0 : undefined, zIndex: i === 0 ? 2 : 1 } }, h)))),
+            React.createElement("tbody", null, data.map((r, j) => React.createElement("tr", { key: j, style: { background: j % 2 ? "rgba(0,0,0,0.025)" : "transparent" } },
+                r.map((c, i) => React.createElement("td", { key: i, style: { ...td, textAlign: i === 0 ? "left" : "right", fontWeight: i === 0 ? 700 : 400, fontFamily: i === 0 ? "'Archivo', sans-serif" : td.fontFamily, position: i === 0 ? "sticky" : undefined, left: i === 0 ? 0 : undefined, background: i === 0 ? COLORS.sheet : undefined } }, c)))))));
+    const note = (t) => React.createElement("div", { style: { fontSize: 11.5, color: COLORS.cote, flexShrink: 0 } }, t);
+    const dnCell = (r) => React.createElement("span", null, "DN" + r[0], React.createElement("span", { style: { display: "block", fontSize: 10.5, fontWeight: 500, color: COLORS.cote } }, r[1] + "″"));
+    let body;
+    if (tab === "tubes") {
+        const k = inox ? 0.024913 : 0.0246615;
+        body = [
+            chips(NT_SCH.map((s, i) => [i, "Sch " + s]), sch, setSch),
+            chips([[false, "Acier (7,85)"], [true, "Inox (7,93)"]], inox, setInox),
+            table(["DN", "Ø ext", "Ép.", "Ø int", "kg/m"], rows.map((r) => {
+                const t = r[3][sch];
+                return [dnCell(r), f1(r[2]), t == null ? "—" : f2(t), t == null ? "—" : f1(r[2] - 2 * t), t == null ? "—" : f2(k * (r[2] - t) * t)];
+            })),
+            note("ASME B36.10M / B36.19M · masse = 0,02466 × (Ø ext − ép) × ép (acier)"),
+        ];
+    }
+    else if (tab === "brides") {
+        const isEN = pn.startsWith("PN");
+        const src = { PN10: NT_EN_PN10, PN16: NT_EN_PN16, PN25: NT_EN_PN25, PN40: NT_EN_PN40 }[pn];
+        body = [
+            chips([["PN10", "PN10"], ["PN16", "PN16"], ["PN25", "PN25"], ["PN40", "PN40"], ["CL150", "Class 150 (PN20)"], ["CL300", "Class 300 (PN50)"]], pn, setPn),
+            isEN
+                ? table(["DN", "Ø ext D", "Entraxe K", "Boulons", "Ø trou"], rows.map((r) => {
+                    const v = src[r[0]];
+                    return v ? [dnCell(r), f0(v[0]), f0(v[1]), v[2] + " × M" + v[3], NT_HOLE[v[3]]] : [dnCell(r), "—", "—", "—", "—"];
+                }))
+                : table(["DN", "Ø ext", "Entraxe", "Boulons", "Haut. WN"], rows.map((r) => {
+                    const v = NT_B165[pn === "CL150" ? 150 : 300][r[0]];
+                    return v ? [dnCell(r), f1(inMm(v[0])), f1(inMm(v[1])), v[2] + " × " + v[3] + "″", f1(inMm(v[4]))] : [dnCell(r), "—", "—", "—", "—"];
+                })),
+            note(isEN ? "EN 1092-1 · cotes de raccordement (identiques pour tous les types de brides du même PN)" : "ASME B16.5 · hauteur WN = bride à collerette, face de joint incluse"),
+        ];
+    }
+    else if (tab === "coudes") {
+        body = [
+            table(["DN", "Ø ext", "90° LR 1,5D", "45° LR", "90° SR 1D"], rows.map((r) => {
+                const v = NT_B169[r[0]];
+                return [dnCell(r), f1(r[2]), f1(inMm(v.lr90)), f1(inMm(v.lr45)), f1(inMm(v.sr90))];
+            })),
+            note("ASME B16.9 · cote centre / face à souder"),
+        ];
+    }
+    else if (tab === "tes") {
+        body = [
+            table(["DN", "Ø ext", "C", "M", "Hors-tout"], rows.map((r) => {
+                const c = inMm(NT_B169[r[0]].te);
+                return [dnCell(r), f1(r[2]), f1(c), f1(c), f1(2 * c)];
+            })),
+            note("ASME B16.9 · té égal à souder · C = centre / bout, M = centre / bout de branche"),
+        ];
+    }
+    else if (tab === "red") {
+        body = [
+            table(["DN", "Ø ext", "Longueur H"], rows.map((r) => [dnCell(r), f1(r[2]), f1(inMm(NT_B169[r[0]].red))])),
+            note("ASME B16.9 · réduction concentrique ou excentrique, longueur selon le grand diamètre"),
+        ];
+    }
+    else {
+        body = [
+            table(["DN", "Ø ext", "Longueur E"], rows.map((r) => [dnCell(r), f1(r[2]), f1(inMm(NT_B169[r[0]].cap))])),
+            note("ASME B16.9 · fond bombé (cap) à souder"),
+        ];
+    }
+    return React.createElement("div", { style: { position: "fixed", inset: 0, background: COLORS.paper, zIndex: 30, display: "flex", flexDirection: "column" } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, padding: "calc(12px + env(safe-area-inset-top)) 16px 12px", background: COLORS.ink, color: COLORS.paper, flexShrink: 0 } },
+            React.createElement("span", { style: { fontWeight: 800, letterSpacing: 1.5, fontSize: 15 } }, "TABLEAUX"),
+            React.createElement("button", { onClick: onClose, style: { marginLeft: "auto", background: "none", border: "none", color: COLORS.paper, fontSize: 20, cursor: "pointer", padding: 4 } }, "✕")),
+        React.createElement("div", { style: { flex: 1, overflowY: "auto", padding: "12px 12px calc(24px + env(safe-area-inset-bottom))", display: "flex", flexDirection: "column", gap: 10, width: "100%", maxWidth: 640, margin: "0 auto", boxSizing: "border-box" } },
+            chips([["tubes", "Tubes"], ["brides", "Brides"], ["coudes", "Coudes"], ["tes", "Tés"], ["red", "Réductions"], ["fonds", "Fonds"]], tab, setTab),
+            React.createElement("select", { value: dnF == null ? "" : dnF, onInput: (e) => setDnF(e.target.value ? +e.target.value : null), style: { padding: "6px 8px", borderRadius: 8, border: `1.4px solid ${COLORS.ink}`, fontSize: 16, background: "#fff", alignSelf: "flex-start", flexShrink: 0 } },
+                React.createElement("option", { value: "" }, "Tous les DN"),
+                NT_ROWS.map((r) => React.createElement("option", { key: r[0], value: r[0] }, "DN" + r[0] + " · " + r[1] + "″"))),
+            ...body));
+};
 // 8 couleurs primaires pour la palette rapide (noir, rouge, orange, jaune,
 // vert, bleu, violet, marron)
 const PALETTE_COLORS = ["#232A33", "#D32F2F", "#E8600A", "#F2B705", "#2E7D32", "#1565C0", "#6A1B9A", "#8D5524"];
@@ -1481,6 +1719,32 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
                     (adj[vs.b] = adj[vs.b] || []).push(vs);
                     from = to;
                 });
+            });
+        });
+        // piquage : son nœud d'extrémité (départ du tracé de branche) est
+        // relié au tube porteur par un connecteur virtuel — position le long
+        // du tube (t, en longueur réelle) + longueur du piquage dans l'axe
+        (fittings || []).forEach((f) => {
+            if (f.type !== "piquage" || !f.node || !nodes[f.node] || f.bdir == null)
+                return;
+            const hs = segments.find((x) => x.id === f.segId);
+            if (!hs || !nodes[hs.a] || !nodes[hs.b])
+                return;
+            let e = { x: 0, y: 0, z: 0 };
+            effectiveLegsOf(hs).forEach((l) => { e = applyLeg(e, l.axis, l.sign, l.len); });
+            const t = f.t != null ? f.t : 0.5;
+            const bd = BDIR_WORLD_2D[f.bdir];
+            const D = (18 * (f.scl || 1)) / UNIT;
+            const off = { x: e.x * t + bd.x * D, y: e.y * t + bd.y * D, z: e.z * t + bd.z * D };
+            const legs = [["x", off.x], ["y", off.y], ["z", off.z]].filter(([, v]) => Math.abs(v) > 1e-6);
+            let from = hs.a;
+            legs.forEach(([axn, v], j) => {
+                const to = j === legs.length - 1 ? f.node : "__piq_" + f.id + "_" + j;
+                const vs = { id: "__piqv_" + f.id + "_" + j, a: from, b: to, __virtual: true, __axis: axn, __sign: v > 0 ? 1 : -1, __len: Math.abs(v) * 100 };
+                virtualSegs.push(vs);
+                (adj[vs.a] = adj[vs.a] || []).push(vs);
+                (adj[vs.b] = adj[vs.b] || []).push(vs);
+                from = to;
             });
         });
         // 1ère passe : résoudre chaque réseau connecté (tronçons réels ET
@@ -3620,6 +3884,18 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
                     ...discSolid(branchMid, bdirVec, branchRWorld, hWorld / 2, bc, N_FIT, true),
                 ];
             }
+            case "piquage": {
+                // piquage (olet) : bossage court sur la génératrice du tube +
+                // départ au DN choisi (branchDn), sans toucher au DN du tube
+                const bR = pipeOdFor(branchDn || dn || 25) / 200;
+                const bossR = bR * 1.45, bossH = Math.max(0.12, bR * 0.9);
+                const stubL = Math.max(0.15, 18 / UNIT - pr - bossH);
+                const at = (d) => ({ x: pos.x + bdirVec.x * d, y: pos.y + bdirVec.y * d, z: pos.z + bdirVec.z * d });
+                return [
+                    ...discSolid(at(pr * 0.7 + bossH / 2), bdirVec, bossR, (pr * 0.3 + bossH) / 2, bc, N_FIT, true),
+                    ...discSolid(at(pr + bossH + stubL / 2), bdirVec, bR, stubL / 2, bc, N_FIT, true),
+                ];
+            }
             case "soudure":
                 return [dot(0, 0, 5)];
             case "souduresw":
@@ -3866,7 +4142,7 @@ const View3D = ({ nodes, segments, fittings, freeDims, walls3D: walls3DRaw, setW
         // solide plein (brides/vannes/bobines...) — l'ancien COLORS.ink (quasi
         // noir) écrasait tout nuancé d'ombrage ; le gris acier laisse le
         // dégradé de faces se voir, tout en respectant f.color si personnalisé
-        const col = f.color || (f.type === "support" ? COLORS.accent : (VOLUMETRIC_FITTING_TYPES.includes(f.type) || APPLIANCE_METAL_TYPES.includes(f.type)) ? "#8A96A3" : COLORS.ink);
+        const col = f.color || (f.type === "support" ? COLORS.accent : (VOLUMETRIC_FITTING_TYPES.includes(f.type) || APPLIANCE_METAL_TYPES.includes(f.type) || f.type === "piquage") ? "#8A96A3" : COLORS.ink);
         const pairNode = bsEndNode(f);
         const pair = pairNode && flangedNozzles[pairNode] && resolved.posMap[pairNode];
         let prims = pair
@@ -4500,6 +4776,7 @@ function IsoChantier() {
     const [showPlans, setShowPlans] = useState(false);
     const [showCalc, setShowCalc] = useState(false);
     const [showDebit, setShowDebit] = useState(false);
+    const [showTables, setShowTables] = useState(false);
     const [settingsAnchor, setSettingsAnchor] = useState(null);
     const [showPrintPanel, setShowPrintPanel] = useState(false);
     const [exportBom, setExportBom] = useState(true); // nomenclature sur l'export PNG/PDF
@@ -4973,13 +5250,80 @@ function IsoChantier() {
         if (ks.some((k) => !nodes[k] || nodes[k].x !== want[k].x || nodes[k].y !== want[k].y || nodes[k].z !== want[k].z))
             setNodes((n) => ({ ...n, ...want }));
     }, [fittings, nodes]);
+    // piquage : direction de branche fixée en axe MONDE + nœud de départ à
+    // l'extrémité du piquage (le tracé repart de là, dans l'axe) — le nœud
+    // suit toujours le piquage, jamais l'inverse (le piquage ne bouge pas)
+    const PIQ_LEN_LOCAL = 18; // longueur du piquage (unités du symbole)
+    const piqDefaultBdir = (f) => {
+        const sg = segments.find((x) => x.id === f.segId);
+        if (!sg || !nodes[sg.a] || !nodes[sg.b])
+            return 4;
+        const A = nodes[sg.a], B = nodes[sg.b];
+        const L = Math.hypot(B.x - A.x, B.y - A.y, B.z - A.z) || 1;
+        const tv = { x: (B.x - A.x) / L, y: (B.y - A.y) / L, z: (B.z - A.z) / L };
+        let bv = 2, bi = 4;
+        [4, 2, 0, 5, 3, 1].forEach((i) => {
+            const d = BDIR_WORLD_2D[i];
+            const v = Math.abs(d.x * tv.x + d.y * tv.y + d.z * tv.z);
+            if (v < bv - 1e-9) {
+                bv = v;
+                bi = i;
+            }
+        });
+        return bi;
+    };
+    const piqEnd3 = (f) => {
+        const sg = segments.find((x) => x.id === f.segId);
+        if (!sg || !nodes[sg.a] || !nodes[sg.b])
+            return null;
+        const A = nodes[sg.a], B = nodes[sg.b], t = f.t != null ? f.t : 0.5;
+        const d = BDIR_WORLD_2D[f.bdir != null ? f.bdir : 4];
+        const L = (PIQ_LEN_LOCAL * (f.scl || 1)) / UNIT;
+        const r = (v) => Math.round(v * 1e6) / 1e6;
+        return { x: r(A.x + (B.x - A.x) * t + d.x * L), y: r(A.y + (B.y - A.y) * t + d.y * L), z: r(A.z + (B.z - A.z) * t + d.z * L) };
+    };
+    useEffect(() => {
+        const need = fittings.filter((f) => f.type === "piquage" && f.segId && (!f.node || f.bdir == null || fittings.some((g) => g !== f && g.node === f.node)));
+        if (!need.length)
+            return;
+        const taken = new Set();
+        setFittings((ff) => ff.map((f) => {
+            if (f.type !== "piquage" || !f.segId)
+                return f;
+            let node = f.node;
+            if (!node || taken.has(node))
+                node = nid();
+            taken.add(node);
+            return { ...f, node, bdir: f.bdir != null ? f.bdir : piqDefaultBdir(f) };
+        }));
+        // eslint-disable-next-line
+    }, [fittings]);
+    useEffect(() => {
+        const want = {};
+        for (const f of fittings) {
+            if (f.type !== "piquage" || !f.node || f.bdir == null)
+                continue;
+            const e = piqEnd3(f);
+            if (e)
+                want[f.node] = e;
+        }
+        const ks = Object.keys(want);
+        if (!ks.length)
+            return;
+        if (ks.some((k) => !nodes[k] || nodes[k].x !== want[k].x || nodes[k].y !== want[k].y || nodes[k].z !== want[k].z))
+            setNodes((n) => ({ ...n, ...want }));
+        // eslint-disable-next-line
+    }, [fittings, nodes, segments]);
     const nozzleNodes = useMemo(() => {
         const set = new Set();
-        for (const f of fittings)
+        for (const f of fittings) {
             if (isApp3(f))
                 for (const n of f.noz || [])
                     if (n.node)
                         set.add(n.node);
+            if (f.type === "piquage" && f.node)
+                set.add(f.node);
+        }
         return set;
     }, [fittings]);
     const fittingScreen = (f) => {
@@ -6407,7 +6751,12 @@ function IsoChantier() {
             // pas le long de chaque direction : projection du tap sur la
             // direction écran → nombre de pas direct (plus de plafond à 40)
             const sc0 = proj(cur);
-            for (const d of DIRS) {
+            // départ d'un piquage (aucun tube encore) : uniquement dans l'axe
+            // du piquage, vers l'extérieur
+            const piqCur = fittings.find((f) => f.type === "piquage" && f.node === current);
+            const piqFree = piqCur && piqCur.bdir != null && !segments.some((s) => s.a === current || s.b === current);
+            const dirsHere = piqFree ? [DIRS[piqCur.bdir]] : DIRS;
+            for (const d of dirsHere) {
                 const s1 = proj({ x: cur.x + d[0], y: cur.y + d[1], z: cur.z + d[2] });
                 const vx = s1.x - sc0.x, vy = s1.y - sc0.y;
                 const v2 = vx * vx + vy * vy || 1;
@@ -6475,6 +6824,11 @@ function IsoChantier() {
             const t = f.t != null ? f.t : 0.5;
             return (t <= 0.02 && s2.a === current) || (t >= 0.98 && s2.b === current);
         });
+        const piqHere = fittings.find((f) => f.type === "piquage" && f.node === current);
+        if (piqHere) {
+            const hostSeg = segments.find((x) => x.id === piqHere.segId);
+            autoDn = piqHere.branchDn || (hostSeg ? hostSeg.dn : null);
+        }
         if (teoHere && teoHere.bdir != null) {
             const bd = BDIR_WORLD_2D[teoHere.bdir];
             const dlen = Math.hypot(delta[0], delta[1], delta[2]) || 1;
@@ -6810,7 +7164,7 @@ function IsoChantier() {
             // pas de sens pour un accessoire dont le but est justement de
             // réduire) — l'utilisateur peut toujours changer via le panneau
             const extra = {};
-            if (addType.type === "teoduit") {
+            if (addType.type === "teoduit" || addType.type === "piquage") {
                 const hostSeg = segments.find((x) => x.id === snap.segId);
                 const mainDn = hostSeg ? hostSeg.dn : null;
                 if (mainDn) {
@@ -7076,7 +7430,9 @@ function IsoChantier() {
                 continue;
             }
             const seg = f.segId ? segments.find((s) => s.id === f.segId) : null;
-            const key = fitLabel(f) + (seg && seg.dn ? " DN" + seg.dn : "");
+            const key = f.type === "piquage"
+                ? fitLabel(f) + (f.branchDn ? " DN" + f.branchDn : "") + (seg && seg.dn ? " sur DN" + seg.dn : "")
+                : fitLabel(f) + (seg && seg.dn ? " DN" + seg.dn : "");
             fitCount[key] = (fitCount[key] || 0) + 1;
         }
         const c90 = elbows.filter((e) => e.kind === "90").length;
@@ -7318,7 +7674,7 @@ function IsoChantier() {
             // Bâche (cuve/réservoir) : même cylindre couché que l'échangeur,
             // sans le serpentin interne
             body = React.createElement("rect", { x: -18, y: -8, width: 36, height: 16, rx: 8, ...common });
-        else if (type === "te" || type === "tesw" || type === "teoduit") {
+        else if (type === "te" || type === "tesw" || type === "teoduit" || type === "piquage") {
             // La branche du té suit obligatoirement une direction isométrique
             const drawA = (STRUCTURE_TYPES.includes(type) ? rot : baseAngle + rot);
             const toRad = (a) => (a * Math.PI) / 180;
@@ -7329,7 +7685,7 @@ function IsoChantier() {
                 bIdx = 4;
                 ISO_DIRS6.forEach((dd, i) => {
                     const v = Math.abs(dd.x * runV.x + dd.y * runV.y);
-                    if (v < bv) {
+                    if (v < bv - 1e-6) {
                         bv = v;
                         bIdx = i;
                     }
@@ -7338,7 +7694,19 @@ function IsoChantier() {
             const dd = ISO_DIRS6[bIdx];
             const la = (Math.atan2(dd.y, dd.x) * 180) / Math.PI - drawA;
             const gx = Math.cos(toRad(la)), gy = Math.sin(toRad(la));
-            if (type === "te" || type === "teoduit")
+            if (type === "piquage")
+                // piquage (olet) : bossage en U sur le tube + départ en
+                // double trait (petit diamètre) dans la direction choisie
+                // repère ISO : u suivant la branche (gx, gy), v suivant le
+                // tube (axe x local) — tous les traits restent parallèles
+                // aux axes iso, jamais un décalage « perpendiculaire écran »
+                body = (() => {
+                    const Q = (u, v) => (gx * u + v).toFixed(2) + "," + (gy * u).toFixed(2);
+                    return React.createElement("g", { fill: "none", stroke: (f.color || COLORS.ink), "stroke-linejoin": "round" },
+                        React.createElement("path", { d: `M ${Q(1, -5.5)} L ${Q(7, -5.5)} L ${Q(7, 5.5)} L ${Q(1, 5.5)} Z`, "stroke-width": 1.6 }),
+                        React.createElement("path", { d: `M ${Q(7, -2.6)} L ${Q(18, -2.6)} L ${Q(18, 2.6)} L ${Q(7, 2.6)}`, "stroke-width": 1.5 }));
+                })();
+            else if (type === "te" || type === "teoduit")
                 body = (React.createElement(React.Fragment, null,
                     React.createElement("line", { x1: -24, y1: 0, x2: 24, y2: 0, stroke: (f.color || COLORS.ink), "stroke-width": 2.2 }),
                     React.createElement("circle", { cx: -14, cy: 0, r: 3, fill: (f.color || COLORS.ink) }),
@@ -7460,7 +7828,7 @@ function IsoChantier() {
     const Arrow = ({ x, y, angle, color, sc = 1 }) => (React.createElement("path", { d: "M 0,0 L -8,-3 L -8,3 Z", fill: color, transform: `translate(${x},${y}) rotate(${angle}) scale(${sc})` }));
     // tubes à l'écran, pour couper les traits de cote qui les croisent
     const dimCutLines = segments.filter((o) => nodes[o.a] && nodes[o.b]).map((o) => [proj(nodes[o.a]), proj(nodes[o.b])]);
-    const cutLineEls = (key, a, b, color, sw, ck) => cutSegPieces(a, b, ck ? coteCutLines(coteGroupsS(), dimCutLines, ck) : dimCutLines, 5 * Math.max(0.45, zoom)).map(([p, q], i) => React.createElement("line", { key: key + i, x1: p.x, y1: p.y, x2: q.x, y2: q.y, stroke: color, "stroke-width": sw }));
+    const cutLineEls = (key, a, b, color, sw, ck) => cutSegPieces(a, b, ck ? coteCutLines(coteGroupsS(), dimCutLines, ck) : dimCutLines, 5 * Math.max(0.45, zoom), dimPolysFor(coteGroupsS(), dimObsS(), ck)).map(([p, q], i) => React.createElement("line", { key: key + i, x1: p.x, y1: p.y, x2: q.x, y2: q.y, stroke: color, "stroke-width": sw }));
     const DimLine = ({ P, Q, value, color, off = 24, flip = false, awayFrom = null, tOff = null, alt = false, ck = null }) => {
         let g = dimGeometry(P, Q, off, flip, alt);
         if (awayFrom) {
@@ -7878,9 +8246,94 @@ function IsoChantier() {
     // comme au croisement de deux tubes entre eux
     // lignes des cotes B1/B2 des triangles de casse (simple et double), même
     // géométrie que leur dessin — pour couper les traits de rappel devant elles
+    // cadre du texte d'une cote (même position que son dessin)
+    const coteTextPoly = (g, val, zv, tOff) => {
+        if (val == null || val === "")
+            return null;
+        const nv = g.n ? (g.tn || g.n) : { x: g.nx, y: g.ny };
+        const k = g.n ? (g.ob ? 8 : 10) : 10;
+        const cx = (g.dA.x + g.dB.x) / 2 + nv.x * fs(k) * zv + (tOff ? (tOff.x || 0) * zv : 0);
+        const cy = (g.dA.y + g.dB.y) / 2 + nv.y * fs(k) * zv + (tOff ? (tOff.y || 0) * zv : 0);
+        let ang = (Math.atan2(g.dB.y - g.dA.y, g.dB.x - g.dA.x) * 180) / Math.PI;
+        const fpx = fs(11.5) * zv;
+        return rectPoly(cx, cy, String(val).length * 0.62 * fpx + 3 * zv, fpx * 1.05, ang);
+    };
+    // obstacles (cadres d'étiquettes, textes, organes, angles de coude) que
+    // les traits de cote ne doivent pas traverser
+    const buildDimObstacles = (P, zv, fitScr, elbowK) => {
+        const obs = [];
+        const pad = 2 * Math.max(0.45, zv);
+        const frame = (c0, lx, ly, txt, wk, tk) => {
+            const fw = fs(11) * (tk || 1) * zv;
+            obs.push(rectPoly(c0.x + lx * zv, c0.y + ly * zv, (txt.length * wk + 1.2) * fw + pad, 1.75 * fw + pad, 0));
+        };
+        const segMid = (s) => {
+            if (!nodes[s.a] || !nodes[s.b])
+                return null;
+            const A = P(nodes[s.a]), B = P(nodes[s.b]);
+            return { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+        };
+        dnGroups.forEach((g) => {
+            const a = g.anchor, c0 = segMid(a);
+            if (c0)
+                frame(c0, a.dnlx != null ? a.dnlx : 40, a.dnly != null ? a.dnly : -44, "DN" + g.dn, 0.68, a.dnFs);
+        });
+        segments.forEach((s) => {
+            if (!s.name || s.nameHidden)
+                return;
+            const c0 = segMid(s);
+            if (c0)
+                frame(c0, s.namelx != null ? s.namelx : -40, s.namely != null ? s.namely : 44, s.name, 0.62, s.nameFs);
+        });
+        fittings.forEach((f) => {
+            if (STRUCTURE_TYPES.includes(f.type) || f.type === "forme" || f.type === "pente")
+                return;
+            if (isApp3(f)) {
+                const g = appPrims(f, P);
+                if (g && g.hull && g.hull.length > 2)
+                    obs.push(g.hull);
+                return;
+            }
+            const p = fitScr(f);
+            if (!p)
+                return;
+            const sc = (f.scl || 1) * zv;
+            if (f.name && !f.nameHidden)
+                frame(p, f.fnlx != null ? f.fnlx : 44, f.fnly != null ? f.fnly : -40, f.name, 0.62, f.nameFs);
+            if (f.type === "texte") {
+                const size = f.size || 13;
+                const w = Math.max(20, (f.text || "").length * size * 0.62);
+                obs.push(rectPoly(p.x, p.y, (w + 6) * sc + pad, size * 1.4 * sc + pad, f.rot || 0));
+                return;
+            }
+            const r = (f.type === "soudure" || f.type === "souduresw" ? 5 : 12) * sc;
+            const oct = [];
+            for (let i = 0; i < 8; i++)
+                oct.push({ x: p.x + Math.cos((i * Math.PI) / 4) * r, y: p.y + Math.sin((i * Math.PI) / 4) * r });
+            obs.push(oct);
+        });
+        elbows.forEach((e) => {
+            const mod = elbowMods[e.node];
+            if ((mod && mod.angleHidden) || !nodes[e.node] || !e.label)
+                return;
+            const C = P(nodes[e.node]);
+            const fpx = fs(7.5) * elbowK;
+            const w = String(e.label).length * 0.62 * fpx;
+            obs.push(rectPoly(C.x + 9 + w / 2, C.y - 9 - fpx * 0.3, w + pad, fpx + pad, 0));
+        });
+        return obs;
+    };
+    const dimPolysFor = (groups, obs, key) => {
+        const out = obs.slice();
+        groups.forEach((g) => {
+            if (g.key !== key && g.tb)
+                out.push(g.tb);
+        });
+        return out;
+    };
     const casseDimLines = (s, P, zv, dimG) => {
         const out = [];
-        const pick = (A, B, off, flipV, away, alt, tag) => {
+        const pick = (A, B, off, flipV, away, alt, tag, val) => {
             let g = dimG(A, B, off, flipV != null ? !!flipV : false, alt);
             if (flipV == null && away) {
                 const g2 = dimG(A, B, off, true, alt);
@@ -7891,17 +8344,19 @@ function IsoChantier() {
             }
             const prs = [[g.dA, g.dB], [A, g.dA], [B, g.dB]];
             prs.forEach((pr) => { pr.tag = tag; out.push(pr); });
+            prs[0].tb = coteTextPoly(g, val, zv, null);
         };
         const tri = (t, endA, endB, l1, l2, l1H, l2H, f1, f2, a1, a2, o1, o2, px) => {
+            const v1 = l1, v2 = l2;
             const ofs = (o) => o || { x: 0, y: 0 };
             const c0 = P(t.corner);
             const Atri = { x: endA.x + ofs(t.triA).x * zv, y: endA.y + ofs(t.triA).y * zv };
             const Btri = { x: endB.x + ofs(t.triB).x * zv, y: endB.y + ofs(t.triB).y * zv };
             const C = { x: c0.x + ofs(t.triC).x * zv, y: c0.y + ofs(t.triC).y * zv };
             if (l1 && !l1H)
-                pick(Atri, C, 22 + (o1 || 0), f1, Btri, a1, px + "1");
+                pick(Atri, C, 22 + (o1 || 0), f1, Btri, a1, px + "1", v1);
             if (l2 && !l2H)
-                pick(C, Btri, 22 + (o2 || 0), f2, Atri, a2, px + "2");
+                pick(C, Btri, 22 + (o2 || 0), f2, Atri, a2, px + "2", v2);
         };
         if (!nodes[s.a] || !nodes[s.b])
             return out;
@@ -7929,15 +8384,17 @@ function IsoChantier() {
             if (o.cote && !o.coteHidden) {
                 const off = 24 + (o.coff || 0);
                 const g = o.caxis != null ? axG(oA, oB, o.caxis, off, o.flip, o.extAlt) : dimG(oA, oB, off, o.flip, o.extAlt);
-                groups.push({ key: "s" + o.id, lines: [[g.dA, g.dB], [oA, g.dA], [oB, g.dB]] });
+                groups.push({ key: "s" + o.id, lines: [[g.dA, g.dB], [oA, g.dA], [oB, g.dB]], tb: coteTextPoly(g, o.cote, zv, { x: o.tox || 0, y: o.toy || 0 }) });
             }
             const byTag = {};
             casseDimLines(o, P, zv, dimG).forEach((pr) => {
                 const k = "k" + o.id + (pr.tag || "");
                 if (!byTag[k]) {
                     byTag[k] = [];
-                    groups.push({ key: k, lines: byTag[k] });
+                    groups.push({ key: k, lines: byTag[k], tb: null });
                 }
+                if (pr.tb)
+                    groups[groups.length - 1].tb = pr.tb;
                 byTag[k].push(pr);
             });
         });
@@ -7948,7 +8405,7 @@ function IsoChantier() {
             if (!P1 || !Q1)
                 return;
             const g = axG(P1, Q1, dimAx(d), d.off, d.flip, d.extAlt);
-            groups.push({ key: "d" + d.id, lines: [[g.dA, g.dB], [P1, g.dA], [Q1, g.dB]] });
+            groups.push({ key: "d" + d.id, lines: [[g.dA, g.dB], [P1, g.dA], [Q1, g.dB]], tb: coteTextPoly(g, d.value, zv, { x: d.tox || 0, y: d.toy || 0 }) });
         });
         return groups;
     };
@@ -7963,7 +8420,8 @@ function IsoChantier() {
             out.push(...groups[j].lines);
         return out;
     };
-    let _coteGroupsS = null;
+    let _coteGroupsS = null, _dimObsS = null;
+    const dimObsS = () => _dimObsS || (_dimObsS = buildDimObstacles(proj, zoom, fittingScreen, 1));
     const coteGroupsS = () => _coteGroupsS || (_coteGroupsS = buildCoteGroups(proj, zoom, dimGeometry, axisDimGeometry, resolvePoint));
     const leaderGapPoints = (P, Q, excludeId) => {
         const pts = [];
@@ -8539,11 +8997,13 @@ function IsoChantier() {
                 return { u, n, dA, dB, ang };
             };
             const dimCutLinesE = segments.filter((o) => nodes[o.a] && nodes[o.b]).map((o) => [projE(nodes[o.a]), projE(nodes[o.b])]);
-            let _cgE = null;
+            let _cgE = null, _obsE = null;
             const strokeCutE = (a, b, ck) => {
-                if (ck && !_cgE)
+                if (!_cgE)
                     _cgE = buildCoteGroups(projE, rv.zoom, dimGeometryE, axisDimGeometryE, resolvePointE);
-                for (const [p, q] of cutSegPieces(a, b, ck ? coteCutLines(_cgE, dimCutLinesE, ck) : dimCutLinesE, 5 * zl)) {
+                if (!_obsE)
+                    _obsE = buildDimObstacles(projE, rv.zoom, fittingScreenE, rv.zoom);
+                for (const [p, q] of cutSegPieces(a, b, ck ? coteCutLines(_cgE, dimCutLinesE, ck) : dimCutLinesE, 5 * zl, dimPolysFor(_cgE, _obsE, ck))) {
                     ctx.beginPath();
                     ctx.moveTo(p.x, p.y);
                     ctx.lineTo(q.x, q.y);
@@ -9163,7 +9623,7 @@ function IsoChantier() {
                     ctx.fill();
                     ctx.stroke();
                 }
-                else if (type === "te" || type === "tesw" || type === "teoduit") {
+                else if (type === "te" || type === "tesw" || type === "teoduit" || type === "piquage") {
                     const toRad = (a) => (a * Math.PI) / 180;
                     const runV = { x: Math.cos(toRad(drawAngle)), y: Math.sin(toRad(drawAngle)) };
                     let bIdx = f.bdir;
@@ -9172,7 +9632,7 @@ function IsoChantier() {
                         bIdx = 4;
                         ISO_DIRS6.forEach((dd, i) => {
                             const v = Math.abs(dd.x * runV.x + dd.y * runV.y);
-                            if (v < bv) {
+                            if (v < bv - 1e-6) {
                                 bv = v;
                                 bIdx = i;
                             }
@@ -9181,7 +9641,27 @@ function IsoChantier() {
                     const dd = ISO_DIRS6[bIdx];
                     const la = (Math.atan2(dd.y, dd.x) * 180) / Math.PI - drawAngle;
                     const gx = Math.cos((la * Math.PI) / 180), gy = Math.sin((la * Math.PI) / 180);
-                    if (type === "te" || type === "teoduit") {
+                    if (type === "piquage") {
+                        const QX = (u, v) => gx * u + v, QY = (u) => gy * u;
+                        ctx.strokeStyle = ink;
+                        ctx.lineJoin = "round";
+                        ctx.lineWidth = 1.6;
+                        ctx.beginPath();
+                        ctx.moveTo(QX(1, -5.5), QY(1));
+                        ctx.lineTo(QX(7, -5.5), QY(7));
+                        ctx.lineTo(QX(7, 5.5), QY(7));
+                        ctx.lineTo(QX(1, 5.5), QY(1));
+                        ctx.closePath();
+                        ctx.stroke();
+                        ctx.lineWidth = 1.5;
+                        ctx.beginPath();
+                        ctx.moveTo(QX(7, -2.6), QY(7));
+                        ctx.lineTo(QX(18, -2.6), QY(18));
+                        ctx.lineTo(QX(18, 2.6), QY(18));
+                        ctx.lineTo(QX(7, 2.6), QY(7));
+                        ctx.stroke();
+                    }
+                    else if (type === "te" || type === "teoduit") {
                         ctx.strokeStyle = ink;
                         ctx.fillStyle = ink;
                         ctx.lineWidth = 2.2;
@@ -9992,7 +10472,7 @@ function IsoChantier() {
             i = 4;
             ISO_DIRS6.forEach((dd, k) => {
                 const v = Math.abs(dd.x * runV.x + dd.y * runV.y);
-                if (v < bv) {
+                if (v < bv - 1e-6) {
                     bv = v;
                     i = k;
                 }
@@ -10143,6 +10623,8 @@ function IsoChantier() {
         const fr = fittings.find((x) => x.id === id);
         if (isApp3(fr))
             dropNozzleNodes((fr.noz || []).map((n) => n.node));
+        if (fr && fr.type === "piquage" && fr.node)
+            dropNozzleNodes([fr.node]);
         setFittings((f) => f.filter((x) => x.id !== id));
         setFreeDims((dd) => dd.filter((d) => d.p1.f !== id && d.p2.f !== id));
         if (selFit === id)
@@ -10153,7 +10635,8 @@ function IsoChantier() {
         setFittings((f) => f.filter((x) => x.segId !== selSeg));
         setSegments((ss) => {
             const next = ss.filter((s) => s.id !== selSeg);
-            const used = new Set([...next.flatMap((s) => [s.a, s.b]), ...nozzleNodes]);
+            const goneNodes = new Set(fittings.filter((f) => f.type === "piquage" && f.segId === selSeg && f.node).map((f) => f.node));
+            const used = new Set([...next.flatMap((s) => [s.a, s.b]), ...[...nozzleNodes].filter((k) => !goneNodes.has(k))]);
             setNodes((n) => Object.fromEntries(Object.entries(n).filter(([k]) => used.has(k))));
             return next;
         });
@@ -10439,7 +10922,8 @@ function IsoChantier() {
             mItem("Apport chaleur", "\u2668\uFE0E", () => { closeMenusNow(); setShowHeat(true); }, true),
             mItem("Calcul", "\u2211", () => { closeMenusNow(); setShowCalc(true); }),
             mItem("D\u00E9bit", "\u2702\uFE0E", () => { closeMenusNow(); setShowDebit(true); }),
-            mItem("D\u00E9velopp\u00E9s", "\u25F0", () => { closeMenusNow(); setDevMounted(true); setShowDev(true); })));
+            mItem("D\u00E9velopp\u00E9s", "\u25F0", () => { closeMenusNow(); setDevMounted(true); setShowDev(true); }),
+            mItem("Tableau", "\u25A6", () => { closeMenusNow(); setShowTables(true); })));
     const openCatMenu = (el, level) => {
         const r = el.getBoundingClientRect();
         const W = 276, vw = window.innerWidth;
@@ -10797,7 +11281,7 @@ function IsoChantier() {
                     return React.createElement(React.Fragment, null,
                         opts.map(([v, lbl]) => React.createElement("button", { key: v, style: (selectedFitting.wOri || 0) === v ? cbOn : cb, onClick: () => updateFit({ wOri: v, rot: isBride ? 0 : (rev ? 180 : 0) }), title: "Trait suivant l'axe " + lbl }, lbl)),
                         !isBride && React.createElement("button", { style: rev ? cbOn : cb, title: "Inverser le sens", onClick: () => updateFit({ rot: rev ? 0 : 180 }) }, "\u21C4"));
-                })() : (selectedFitting.type === "te" || selectedFitting.type === "tesw" || selectedFitting.type === "teoduit") ? (React.createElement(React.Fragment, null,
+                })() : (selectedFitting.type === "te" || selectedFitting.type === "tesw" || selectedFitting.type === "teoduit" || selectedFitting.type === "piquage") ? (React.createElement(React.Fragment, null,
                     React.createElement("button", { style: cb, onClick: () => cycleBranch(-1) }, "\u27F2"),
                     React.createElement("button", { style: cb, onClick: () => cycleBranch(1) }, "\u27F3"))) : isApp3(selectedFitting) ? (React.createElement(React.Fragment, null,
                     [["X", "Couch\u00E9 suivant X"], ["Y", "Couch\u00E9 suivant Y"], ["Z", "Debout (Z)"]].map(([ax, lbl]) => React.createElement("button", { key: ax, style: appAxis(selectedFitting) === ax ? cbOn : cb, onClick: () => updateApp((f) => ({ ...f, axis3d: ax })), title: lbl }, ax)),
@@ -10838,7 +11322,7 @@ function IsoChantier() {
                 React.createElement("span", { style: labS }, "Encombrement"),
                 React.createElement(NumField, { calcFocus: calcFocus, setCalcFocus: setCalcFocus, placeholder: "mm", width: 96, value: selectedFitting.enc || "", onInput: (e) => updateFit({ enc: e.target.value ? +e.target.value : null }) }),
                 React.createElement("span", { style: { fontSize: 11, color: COLORS.cote, flexShrink: 0 } }, "face \u00E0 face \u00B7 rendu 3D"))]),
-            selectedFitting.type === "teoduit" && (React.createElement("div", { style: rowS },
+            (selectedFitting.type === "teoduit" || selectedFitting.type === "piquage") && (React.createElement("div", { style: rowS },
                 React.createElement("span", { style: labS }, "DN piquage"),
                 React.createElement("select", { value: selectedFitting.branchDn || "", onInput: (e) => updateFit({ branchDn: e.target.value ? +e.target.value : null }), style: { padding: "8px 10px", borderRadius: 8, border: `1.4px solid ${COLORS.ink}`, fontSize: 16, background: "#fff" } },
                     React.createElement("option", { value: "" }, "= DN ligne"),
@@ -11610,6 +12094,7 @@ function IsoChantier() {
                 visibility: showDev ? "visible" : "hidden", pointerEvents: showDev ? "auto" : "none",
             } }),
         React.createElement(HeatInputPanel, { open: showHeat, onClose: () => setShowHeat(false), chip: chip, chipOn: chipOn }),
+        showTables && React.createElement(NormTables, { onClose: () => setShowTables(false) }),
         showDebit && (React.createElement("div", { style: {
                 position: "fixed", inset: 0, background: COLORS.paper, zIndex: 30,
                 display: "flex", flexDirection: "column",
