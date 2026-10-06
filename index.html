@@ -4867,6 +4867,10 @@ function IsoChantier() {
     const [exportBom, setExportBom] = useState(true); // nomenclature sur l'export PNG/PDF
     const [exportSheet, setExportSheet] = useState(false); // export sur la feuille ISO MTO (FOR 069)
     const [exportZoom, setExportZoom] = useState(1); // zoom du dessin à l'export (1 = au plus grand)
+    const [exportPan, setExportPan] = useState({ x: 0, y: 0 }); // position du dessin dans la feuille Monteiro (px de page)
+    const previewRef = useRef(null); // canvas de l'aperçu de la feuille Monteiro
+    const previewDrawRef = useRef(null); // fonction de rendu de l'aperçu (mise à jour à chaque rendu)
+    const previewDragRef = useRef(null);
     const [toolsAnchor, setToolsAnchor] = useState(null);
     const [menuClosing, setMenuClosing] = useState(false);
     const [catMenu, setCatMenu] = useState(null); // { left, bottom, ox } quand la fenêtre des catégories est ouverte
@@ -9007,11 +9011,14 @@ function IsoChantier() {
         const rcx = best.L + best.aw / 2, rcy = T + best.ah / 2;
         return { W, H, zoomE, cx, cy, rcx, rcy, CK, NK };
     };
-    const exportPng = (mode) => {
-        try {
-            const onSheet = exportSheet;
+    // rendu de l'export sur canvas (outScale px par px de page) — sert à
+    // l'export PNG/PDF et à l'aperçu de la feuille Monteiro ; pan : décalage du
+    // dessin dans la feuille (px de page), réglé à la main dans l'aperçu
+    const renderExport = (onSheet, outScale, pan) => {
+        {
             const { W, H, zoomE, cx, cy, rcx, rcy, CK, NK, sheet: SH } = computeExportBox(onSheet);
-            const rv = { w: W, h: H, zoom: zoomE, offX: rcx - W / 2 - cx * zoomE, offY: rcy - H / 2 - cy * zoomE };
+            const panX = onSheet && pan ? pan.x : 0, panY = onSheet && pan ? pan.y : 0;
+            const rv = { w: W, h: H, zoom: zoomE, offX: rcx - W / 2 - cx * zoomE + panX, offY: rcy - H / 2 - cy * zoomE + panY };
             const zl = Math.max(0.45, rv.zoom);
             const U = UNIT * rv.zoom;
             // ---- projections paramétrées sur la vue d'export (indépendantes de l'écran) ----
@@ -9090,8 +9097,8 @@ function IsoChantier() {
                 return { mid, x: c0.x + ((_a = anchor.dnlx) !== null && _a !== void 0 ? _a : 40) * rv.zoom, y: c0.y + ((_b = anchor.dnly) !== null && _b !== void 0 ? _b : -44) * rv.zoom };
             };
             const c = document.createElement("canvas");
-            c.width = Math.round(W * 2);
-            c.height = Math.round(H * 2);
+            c.width = Math.round(W * outScale);
+            c.height = Math.round(H * outScale);
             const ctx = c.getContext("2d");
             if (!ctx) {
                 resetTouchState();
@@ -9099,7 +9106,7 @@ function IsoChantier() {
                 resetTouchState();
                 return;
             }
-            ctx.scale(2, 2);
+            ctx.scale(outScale, outScale);
             const bgColorForExport = exportBg === "blue" ? "#EAF1F8" : exportBg === "white" ? "#FFFFFF" : COLORS.paper;
             if (onSheet) {
                 // feuille ISO MTO (FOR 069) : son quadrillage est remplacé par le
@@ -9117,7 +9124,7 @@ function IsoChantier() {
                         cc.moveTo(a.x, a.y);
                         cc.lineTo(b.x, b.y);
                         cc.strokeStyle = blue ? (strong ? "#96B3D1" : "#C3D5E8") : (strong ? COLORS.gridStrong : COLORS.grid);
-                        cc.lineWidth = strong ? 1.2 : 0.7;
+                        cc.lineWidth = 0.7; // export : tous les traits au plus fin
                         cc.stroke();
                     }
                 });
@@ -9137,7 +9144,7 @@ function IsoChantier() {
                 const exportGrid = buildGrid(rv);
                 exportGrid.forEach(([a, b, strong]) => {
                     ctx.strokeStyle = strong ? "#96B3D1" : "#C3D5E8";
-                    ctx.lineWidth = strong ? 1.2 : 0.7;
+                    ctx.lineWidth = 0.7; // export : tous les traits au plus fin
                     ctx.beginPath();
                     ctx.moveTo(a.x, a.y);
                     ctx.lineTo(b.x, b.y);
@@ -9335,7 +9342,7 @@ function IsoChantier() {
                     ctx.moveTo(a.x, a.y);
                     ctx.lineTo(b.x, b.y);
                     ctx.strokeStyle = strong ? COLORS.gridStrong : COLORS.grid;
-                    ctx.lineWidth = strong ? 1.2 : 0.7;
+                    ctx.lineWidth = 0.7; // export : tous les traits au plus fin
                     ctx.stroke();
                 }
             }
@@ -10379,7 +10386,7 @@ function IsoChantier() {
                 });
             })();
             // ---- cartouche ----
-            if (cart.on || onSheet) {
+            if (cart.on) {
                 const K = CK;
                 const w = 290 * K, h = 132 * K;
                 let x0, y0;
@@ -10465,6 +10472,15 @@ function IsoChantier() {
                 });
                 ctx.restore();
             })();
+            return c;
+        }
+    };
+    const exportPng = (mode) => {
+        try {
+            const onSheet = exportSheet;
+            const c = renderExport(onSheet, 2, exportPan);
+            if (!c)
+                return;
             // ---- téléchargement ou impression PDF ----
             let dataUrl;
             try {
@@ -11001,6 +11017,77 @@ function IsoChantier() {
         mItem("Cartouche", "\u25AD", () => { closeMenusNow(); setShowCart(true); }),
         mItem("Nomenclature", "\u2630", () => { closeMenusNow(); setShowBom(true); }),
         mItem("Impression PDF / PNG", "\u203A", () => setShowPrintPanel(true)));
+    // ---- aperçu de la feuille Monteiro : rendu réel de l'export, à petite échelle ----
+    useEffect(() => {
+        if (!(settingsAnchor && showPrintPanel && exportSheet))
+            return;
+        const id = requestAnimationFrame(() => previewDrawRef.current && previewDrawRef.current(exportPan));
+        return () => cancelAnimationFrame(id);
+        // eslint-disable-next-line
+    }, [settingsAnchor, showPrintPanel, exportSheet, exportZoom, exportPan, exportBg, exportBom, cart, nodes, segments, fittings, freeDims]);
+    previewDrawRef.current = (pan) => {
+        const cv = previewRef.current;
+        if (!cv)
+            return;
+        try {
+            const dpr = Math.min(3, window.devicePixelRatio || 1);
+            const cssW = cv.clientWidth || 240;
+            const r = renderExport(true, (cssW * dpr) / 1600, pan);
+            if (!r)
+                return;
+            if (cv.width !== r.width || cv.height !== r.height) {
+                cv.width = r.width;
+                cv.height = r.height;
+            }
+            const x = cv.getContext("2d");
+            x.clearRect(0, 0, cv.width, cv.height);
+            x.drawImage(r, 0, 0);
+        }
+        catch (e) { }
+    };
+    const previewPointer = {
+        onPointerDown: (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            try { e.currentTarget.setPointerCapture(e.pointerId); } catch (er) { }
+            const prev = previewDragRef.current;
+            const now = Date.now();
+            // double tap : dessin recentré
+            const dbl = prev && prev.lastTap && now - prev.lastTap < 320;
+            previewDragRef.current = { x: e.clientX, y: e.clientY, pan0: exportPan, pan: exportPan, moved: false, raf: 0, lastTap: prev ? prev.lastTap : 0, dbl };
+        },
+        onPointerMove: (e) => {
+            const d = previewDragRef.current;
+            if (!d || d.x === undefined)
+                return;
+            const k = 1600 / (e.currentTarget.clientWidth || 240);
+            const dx = e.clientX - d.x, dy = e.clientY - d.y;
+            if (!d.moved && Math.hypot(dx, dy) < 3)
+                return;
+            d.moved = true;
+            d.pan = { x: d.pan0.x + dx * k, y: d.pan0.y + dy * k };
+            if (!d.raf)
+                d.raf = requestAnimationFrame(() => { d.raf = 0; previewDrawRef.current && previewDrawRef.current(d.pan); });
+        },
+        onPointerUp: (e) => {
+            const d = previewDragRef.current;
+            if (!d || d.x === undefined)
+                return;
+            if (d.raf)
+                cancelAnimationFrame(d.raf);
+            if (d.moved) {
+                previewDragRef.current = { lastTap: 0 };
+                setExportPan(d.pan);
+            }
+            else if (d.dbl) {
+                previewDragRef.current = { lastTap: 0 };
+                setExportPan({ x: 0, y: 0 });
+            }
+            else
+                previewDragRef.current = { lastTap: Date.now() };
+        },
+    };
+    previewPointer.onPointerCancel = previewPointer.onPointerUp;
     const settingsPrintPanel = React.createElement("div", { className: "ios-sub", style: { display: "flex", flexDirection: "column" } },
         mItem("Retour", "\u2039", () => setShowPrintPanel(false), true, { color: "#007AFF" }),
         React.createElement("div", { style: { ...menuItem, cursor: "default" } },
@@ -11010,10 +11097,13 @@ function IsoChantier() {
             React.createElement("span", { style: { flex: 1 } }, "Nomenclature"),
             iosSeg([[true, "Oui"], [false, "Non"]], exportBom, (v) => setExportBom(v))),
         React.createElement("div", { style: { ...menuItem, cursor: "default" } },
-            React.createElement("span", { style: { flex: 1 } }, "Export sur ISO MTO"),
+            React.createElement("span", { style: { flex: 1 } }, "Cartouche"),
+            iosSeg([[true, "Oui"], [false, "Non"]], !!cart.on, (v) => setCart((c) => ({ ...c, on: v })))),
+        React.createElement("div", { style: { ...menuItem, cursor: "default" } },
+            React.createElement("span", { style: { flex: 1, whiteSpace: "nowrap" } }, "Export Monteiro"),
             iosSeg([[true, "Oui"], [false, "Non"]], exportSheet, (v) => setExportSheet(v))),
         React.createElement("div", { style: { ...menuItem, cursor: "default" } },
-            React.createElement("span", { style: { flex: 1 } }, "Zoom du dessin"),
+            React.createElement("span", { style: { flex: 1 } }, "Zoom"),
             (() => {
                 const zBtn = (lbl, d) => React.createElement("button", { onClick: () => setExportZoom((z) => Math.min(3, Math.max(0.3, Math.round((z + d) * 10) / 10))), style: {
                         border: "none", borderRadius: 7, padding: "5px 12px", fontFamily: IOS_FONT, fontSize: 15, fontWeight: 600,
@@ -11023,6 +11113,11 @@ function IsoChantier() {
                     React.createElement("span", { onClick: () => setExportZoom(1), style: { minWidth: 52, textAlign: "center", fontFamily: IOS_FONT, fontSize: 13.5, fontWeight: 600, cursor: "pointer" } }, Math.round(exportZoom * 100) + " %"),
                     zBtn("+", 0.1));
             })()),
+        // aperçu de la feuille Monteiro : on y fait glisser le dessin (double tap : recentrer)
+        exportSheet && React.createElement("div", { style: { padding: "8px 16px 12px", borderTop: "0.5px solid rgba(60,60,67,0.22)" } },
+            React.createElement("canvas", { ref: previewRef, width: 842, height: 595, ...previewPointer, style: {
+                    display: "block", width: "100%", height: "auto", borderRadius: 6, background: "#fff", cursor: "grab",
+                    boxShadow: "0 1px 4px rgba(0,0,0,0.18)", touchAction: "none" } })),
         React.createElement("div", { style: menuSep }),
         mItem("Exporter en PNG", "\u2B07\uFE0E", () => { closeMenusNow(); exportPng(); }, true),
         mItem("Exporter en PDF", "\u2399", () => { closeMenusNow(); exportPng("pdf"); }));
